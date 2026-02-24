@@ -273,12 +273,12 @@ export const useAuthStore = defineStore('auth', () => {
 	 */
 	async function checkAuth() {
 		const now = new Date()
-		const inOneMinute = new Date(new Date().setMinutes(now.getMinutes() + 1))
+		const oneMinuteAgo = new Date(new Date().setMinutes(now.getMinutes() - 1))
 		// This function can be called from multiple places at the same time and shortly after one another.
 		// To prevent hitting the api too frequently or race conditions, we check at most once per minute.
 		if (
 			lastUserInfoRefresh.value !== null &&
-			lastUserInfoRefresh.value > inOneMinute
+			lastUserInfoRefresh.value > oneMinuteAgo
 		) {
 			return
 		}
@@ -291,12 +291,20 @@ export const useAuthStore = defineStore('auth', () => {
 					.split('.')[1]
 					.replace(/-/g, '+')
 					.replace(/_/g, '/')
-				const info = new UserModel(JSON.parse(atob(base64)))
+				const jwtUser = new UserModel(JSON.parse(atob(base64)))
 				const ts = Math.round((new Date()).getTime() / MILLISECONDS_A_SECOND)
 
-				isAuthenticated = info.exp >= ts
-				// Settings should only be loaded from the api request, not via the jwt
-				setUser(info, false)
+				isAuthenticated = jwtUser.exp >= ts
+				// Only set user from JWT if we don't already have a fully loaded
+				// user with the same ID. The JWT lacks fields like `name`, so
+				// overwriting a complete user object causes a visible flash
+				// where the display name briefly reverts to the username.
+				if (info.value === null || info.value.id !== jwtUser.id) {
+					setUser(jwtUser, false)
+				} else {
+					// Always keep exp in sync so token renewal checks stay accurate
+					info.value.exp = jwtUser.exp
+				}
 			} catch (_) {
 				logout()
 			}
@@ -445,6 +453,7 @@ export const useAuthStore = defineStore('auth', () => {
 		removeToken()
 		const loggedInVia = getLoggedInVia()
 		window.localStorage.clear() // Clear all settings and history we might have saved in local storage.
+		lastUserInfoRefresh.value = null
 		await router.push({name: 'user.login'})
 		await checkAuth()
 

@@ -28,6 +28,8 @@ import (
 	"io"
 	"io/fs"
 	"math"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -35,6 +37,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/iancoleman/strcase"
@@ -69,6 +72,7 @@ var (
 		"dev:make-notification":       Dev.MakeNotification,
 		"dev:prepare-worktree":        Dev.PrepareWorktree,
 		"dev:tag-release":             Dev.TagRelease,
+		"test:e2e":                    Test.E2E,
 		"plugins:build":               Plugins.Build,
 		"lint":                        Check.Golangci,
 		"lint:fix":                    Check.GolangciFix,
@@ -316,6 +320,58 @@ func printSuccess(text string, args ...interface{}) {
 	fmt.Printf(InfoColor+"\n", text)
 }
 
+// getE2EPort returns the port from the given env var, or a random available port.
+func getE2EPort(envVar string) (int, error) {
+	if v := os.Getenv(envVar); v != "" {
+		return strconv.Atoi(v)
+	}
+	return getRandomPort()
+}
+
+// getRandomPort finds a random available TCP port.
+func getRandomPort() (int, error) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return 0, err
+	}
+	defer l.Close()
+	return l.Addr().(*net.TCPAddr).Port, nil
+}
+
+// setProcessGroup configures a command to run in its own process group,
+// so that all child processes can be killed together.
+func setProcessGroup(cmd *exec.Cmd) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+}
+
+// killProcessGroup sends a signal to the entire process group of the given command.
+func killProcessGroup(cmd *exec.Cmd) {
+	if cmd.Process != nil {
+		pgid, err := syscall.Getpgid(cmd.Process.Pid)
+		if err == nil {
+			syscall.Kill(-pgid, syscall.SIGTERM)
+		}
+		cmd.Wait()
+	}
+}
+
+// waitForHTTP polls a URL until it returns a 200 status or the timeout expires.
+func waitForHTTP(url string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	client := &http.Client{Timeout: 2 * time.Second}
+	for time.Now().Before(deadline) {
+		resp, err := client.Get(url)
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				return nil
+			}
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	return fmt.Errorf("timed out waiting for %s after %s", url, timeout)
+}
+
 // Fmt formats the code using go fmt
 func Fmt() error {
 	mg.Deps(initVars)
@@ -369,6 +425,166 @@ func (Test) Filter(filter string) error {
 func (Test) All() {
 	mg.Deps(initVars)
 	mg.Deps(Test.Feature, Test.Web)
+}
+
+// E2E builds the API, starts it with an in-memory database and the frontend dev server,
+// runs the Playwright e2e tests against them, then tears everything down.
+// This does not touch your local database.
+//
+// Any arguments are passed through to Playwright. Examples:
+//
+//	mage test:e2e ""                                     # run all tests
+//	mage test:e2e "tests/e2e/misc/menu.spec.ts"         # run a specific test file
+//	mage test:e2e "--grep menu"                          # filter by test name
+//	mage test:e2e "--headed"                             # run in headed browser mode
+//	mage test:e2e "--headed tests/e2e/misc/menu.spec.ts" # combine flags
+//
+// Environment variable overrides:
+//   - VIKUNJA_E2E_API_PORT: API port (default: random)
+//   - VIKUNJA_E2E_FRONTEND_PORT: Frontend port (default: random)
+//   - VIKUNJA_E2E_TESTING_TOKEN: Testing token for seed endpoints (default: random)
+//   - VIKUNJA_E2E_SKIP_BUILD: Set to "true" to skip rebuilding the API binary (default: false)
+func (Test) E2E(args string) error {
+	mg.Deps(initVars)
+
+	// Determine ports
+	apiPort, err := getE2EPort("VIKUNJA_E2E_API_PORT")
+	if err != nil {
+		return fmt.Errorf("could not get API port: %w", err)
+	}
+	frontendPort, err := getE2EPort("VIKUNJA_E2E_FRONTEND_PORT")
+	if err != nil {
+		return fmt.Errorf("could not get frontend port: %w", err)
+	}
+
+	// Generate a random testing token
+	testingToken := os.Getenv("VIKUNJA_E2E_TESTING_TOKEN")
+	if testingToken == "" {
+		testingToken = fmt.Sprintf("e2e-test-token-%d", time.Now().UnixNano())
+	}
+
+	fmt.Printf("E2E test configuration:\n")
+	fmt.Printf("  API port:      %d\n", apiPort)
+	fmt.Printf("  Frontend port: %d\n", frontendPort)
+	fmt.Printf("  Testing token: %s\n", testingToken)
+
+	// Build the API binary (unless skipped)
+	if os.Getenv("VIKUNJA_E2E_SKIP_BUILD") != "true" {
+		fmt.Println("\n--- Building API binary ---")
+		if err := (Build{}).Build(); err != nil {
+			return fmt.Errorf("failed to build API: %w", err)
+		}
+	}
+
+	// Create temp directory for file uploads and rootpath
+	tmpDir, err := os.MkdirTemp("", "vikunja-e2e-*")
+	if err != nil {
+		return fmt.Errorf("failed to create temp dir: %w", err)
+	}
+	defer func() {
+		fmt.Println("\n--- Cleaning up temp directory ---")
+		os.RemoveAll(tmpDir)
+	}()
+
+	if err := os.MkdirAll(filepath.Join(tmpDir, "files"), 0o755); err != nil {
+		return fmt.Errorf("failed to create files dir: %w", err)
+	}
+
+	// Start the API server — all config via env vars, no config file
+	// Uses in-memory SQLite (no DB file on disk)
+	fmt.Println("\n--- Starting API server ---")
+	apiCmd := exec.Command("./vikunja", "web")
+	apiCmd.Env = append(os.Environ(),
+		fmt.Sprintf("VIKUNJA_SERVICE_INTERFACE=:%d", apiPort),
+		fmt.Sprintf("VIKUNJA_SERVICE_PUBLICURL=http://127.0.0.1:%d/", apiPort),
+		fmt.Sprintf("VIKUNJA_SERVICE_TESTINGTOKEN=%s", testingToken),
+		fmt.Sprintf("VIKUNJA_SERVICE_ROOTPATH=%s", tmpDir),
+		"VIKUNJA_SERVICE_JWTSECRET=e2e-test-jwt-secret-do-not-use-in-production",
+		"VIKUNJA_DATABASE_TYPE=sqlite",
+		"VIKUNJA_DATABASE_PATH=memory",
+		fmt.Sprintf("VIKUNJA_FILES_BASEPATH=%s", filepath.Join(tmpDir, "files")),
+		"VIKUNJA_LOG_LEVEL=WARNING",
+		"VIKUNJA_MAILER_ENABLED=false",
+		"VIKUNJA_REDIS_ENABLED=false",
+	)
+	apiCmd.Stdout = os.Stdout
+	apiCmd.Stderr = os.Stderr
+	setProcessGroup(apiCmd)
+	if err := apiCmd.Start(); err != nil {
+		return fmt.Errorf("failed to start API: %w", err)
+	}
+	defer func() {
+		fmt.Println("\n--- Stopping API server ---")
+		killProcessGroup(apiCmd)
+	}()
+
+	// Wait for API to be ready
+	apiBase := fmt.Sprintf("http://127.0.0.1:%d/api/v1", apiPort)
+	fmt.Printf("Waiting for API at %s ...\n", apiBase)
+	if err := waitForHTTP(apiBase+"/info", 30*time.Second); err != nil {
+		return fmt.Errorf("API failed to start: %w", err)
+	}
+	printSuccess("API is ready!")
+
+	// Build the frontend
+	fmt.Println("\n--- Building frontend ---")
+	buildFrontendCmd := exec.Command("pnpm", "build:dev")
+	buildFrontendCmd.Dir = "frontend"
+	buildFrontendCmd.Stdout = os.Stdout
+	buildFrontendCmd.Stderr = os.Stderr
+	if err := buildFrontendCmd.Run(); err != nil {
+		return fmt.Errorf("failed to build frontend: %w", err)
+	}
+	printSuccess("Frontend built!")
+
+	// Serve the built frontend with vite preview (static, no file watchers)
+	fmt.Println("\n--- Starting frontend preview server ---")
+	frontendCmd := exec.Command("pnpm", "preview:dev", "--port", strconv.Itoa(frontendPort))
+	frontendCmd.Dir = "frontend"
+	frontendCmd.Stdout = os.Stdout
+	frontendCmd.Stderr = os.Stderr
+	setProcessGroup(frontendCmd)
+	if err := frontendCmd.Start(); err != nil {
+		return fmt.Errorf("failed to start frontend: %w", err)
+	}
+	defer func() {
+		fmt.Println("\n--- Stopping frontend preview server ---")
+		killProcessGroup(frontendCmd)
+	}()
+
+	// Wait for frontend to be ready
+	frontendBase := fmt.Sprintf("http://127.0.0.1:%d", frontendPort)
+	fmt.Printf("Waiting for frontend at %s ...\n", frontendBase)
+	if err := waitForHTTP(frontendBase, 60*time.Second); err != nil {
+		return fmt.Errorf("frontend failed to start: %w", err)
+	}
+	printSuccess("Frontend is ready!")
+
+	// Run Playwright tests
+	fmt.Println("\n--- Running Playwright e2e tests ---")
+	playwrightArgs := []string{"test:e2e"}
+	if strings.TrimSpace(args) != "" {
+		playwrightArgs = append(playwrightArgs, strings.Fields(args)...)
+	}
+	playwrightCmd := exec.Command("pnpm", playwrightArgs...)
+	playwrightCmd.Dir = "frontend"
+	playwrightCmd.Env = append(os.Environ(),
+		fmt.Sprintf("API_URL=%s/", apiBase),
+		fmt.Sprintf("BASE_URL=%s", frontendBase),
+		fmt.Sprintf("VIKUNJA_SERVICE_TESTINGTOKEN=%s", testingToken),
+		fmt.Sprintf("TEST_SECRET=%s", testingToken),
+	)
+	playwrightCmd.Stdout = os.Stdout
+	playwrightCmd.Stderr = os.Stderr
+
+	testErr := playwrightCmd.Run()
+
+	if testErr != nil {
+		return fmt.Errorf("e2e tests failed: %w", testErr)
+	}
+
+	printSuccess("All e2e tests passed!")
+	return nil
 }
 
 type Check mg.Namespace
@@ -800,7 +1016,8 @@ func (Release) Compress(ctx context.Context) error {
 		if strings.Contains(info.Name(), "mips") ||
 			strings.Contains(info.Name(), "s390x") ||
 			strings.Contains(info.Name(), "riscv64") ||
-			strings.Contains(info.Name(), "darwin") {
+			strings.Contains(info.Name(), "darwin") ||
+			(strings.Contains(info.Name(), "windows") && strings.Contains(info.Name(), "arm64")) {
 			// not supported by upx
 			return nil
 		}
