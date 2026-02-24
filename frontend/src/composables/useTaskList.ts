@@ -117,9 +117,7 @@ export function useTaskList(
 			const cached = includeSubprojectsCache.value[newProjectId]
 			if (typeof cached === 'boolean') {
 				includeSubprojects.value = cached
-				return
 			}
-			includeSubprojects.value = false
 		},
 		{immediate: true},
 	)

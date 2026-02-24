@@ -1,4 +1,5 @@
 import {watch, type Ref} from 'vue'
+import {useStorage} from '@vueuse/core'
 import type {RouteLocationNormalized, RouteLocationRaw, LocationQueryRaw} from 'vue-router'
 
 import {useViewFiltersStore} from '@/stores/viewFilters'
@@ -126,6 +127,7 @@ export type UseGanttFiltersReturn =
 
 export function useGanttFilters(route: Ref<RouteLocationNormalized>, viewId: Ref<IProjectView['id']>): UseGanttFiltersReturn {
 	const viewFiltersStore = useViewFiltersStore()
+	const includeSubprojectsCache = useStorage<Record<string, boolean>>('includeSubprojectsByProject', {})
 
 	const {
 		filters,
@@ -137,6 +139,38 @@ export function useGanttFilters(route: Ref<RouteLocationNormalized>, viewId: Ref
 		ganttRouteToFilters,
 		ganttFiltersToRoute,
 		['project.view'],
+	)
+
+	watch(
+		() => filters.value.projectId,
+		(newProjectId) => {
+			if (newProjectId <= 0) {
+				filters.value.includeSubprojects = false
+				return
+			}
+			const cached = includeSubprojectsCache.value[newProjectId]
+			if (typeof cached === 'boolean') {
+				filters.value.includeSubprojects = cached
+			}
+		},
+		{immediate: true},
+	)
+
+	watch(
+		() => [filters.value.projectId, filters.value.includeSubprojects] as const,
+		([newProjectId, includeSubprojectsValue]) => {
+			if (newProjectId <= 0) {
+				return
+			}
+			if (includeSubprojectsCache.value[newProjectId] === includeSubprojectsValue) {
+				return
+			}
+			includeSubprojectsCache.value = {
+				...includeSubprojectsCache.value,
+				[newProjectId]: includeSubprojectsValue,
+			}
+		},
+		{immediate: true},
 	)
 
 	// Sync filters to store whenever they change (for view tab navigation)
