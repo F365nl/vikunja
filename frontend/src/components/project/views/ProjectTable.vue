@@ -82,7 +82,7 @@
 					@update:modelValue="taskList.loadTasks()"
 				/>
 				<FancyCheckbox
-					v-if="projectId > 0 && showIncludeSubprojectsToggle"
+					v-if="projectId > 0"
 					v-model="includeSubprojects"
 					v-tooltip="$t('project.views.includeSubprojectsHint')"
 					class="include-subprojects-toggle"
@@ -334,7 +334,6 @@ import type {IProjectView} from '@/modelTypes/IProjectView'
 import { camelCase } from 'change-case'
 import {isSavedFilter} from '@/services/savedFilter'
 import {useProjectStore} from '@/stores/projects'
-import {useAuthStore} from '@/stores/auth'
 
 const props = defineProps<{
 	isLoadingProject: boolean,
@@ -343,8 +342,6 @@ const props = defineProps<{
 }>()
 
 const projectStore = useProjectStore()
-const authStore = useAuthStore()
-const showIncludeSubprojectsToggle = computed(() => authStore.settings.frontendSettings.showIncludeSubprojectsToggle ?? false)
 
 const ACTIVE_COLUMNS_DEFAULT = {
 	index: true,

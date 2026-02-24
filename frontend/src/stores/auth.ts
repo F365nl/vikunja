@@ -126,6 +126,7 @@ export const useAuthStore = defineStore('auth', () => {
 	}
 	
 	function loadSettings(newSettings: IUserSettings) {
+		const {showIncludeSubprojectsToggle: _showIncludeSubprojectsToggle, ...frontendSettings} = newSettings.frontendSettings ?? {}
 		settings.value = new UserSettingsModel({
 			...newSettings,
 			frontendSettings: {
@@ -138,10 +139,9 @@ export const useAuthStore = defineStore('auth', () => {
 				timeFormat: TIME_FORMAT.HOURS_24,
 				defaultTaskRelationType: RELATION_KIND.RELATED,
 				backgroundBrightness: 100,
-				showIncludeSubprojectsToggle: true,
 				sidebarWidth: null,
 				commentSortOrder: 'asc',
-				...newSettings.frontendSettings,
+				...frontendSettings,
 			},
 		})
 		// console.log('settings from auth store', {...settings.value.frontendSettings})
