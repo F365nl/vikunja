@@ -27,34 +27,37 @@ type PasswordReset struct {
 	// The previously issued reset token.
 	Token string `json:"token"`
 	// The new password for this user.
-	NewPassword string `json:"new_password"`
+	NewPassword string `json:"new_password" valid:"bcrypt_password" minLength:"8" maxLength:"72"`
 }
 
-// ResetPassword resets a users password
-func ResetPassword(s *xorm.Session, reset *PasswordReset) (err error) {
+// ResetPassword resets a users password. It returns the ID of the user whose
+// password was reset so callers can perform additional cleanup (e.g. session
+// invalidation).
+func ResetPassword(s *xorm.Session, reset *PasswordReset) (userID int64, err error) {
 
 	// Check if the password is not empty
 	if reset.NewPassword == "" {
-		return ErrNoUsernamePassword{}
+		return 0, ErrNoUsernamePassword{}
 	}
 
 	if reset.Token == "" {
-		return ErrNoPasswordResetToken{}
+		return 0, ErrNoPasswordResetToken{}
 	}
 
 	// Check if we have a token
 	token, err := getToken(s, reset.Token, TokenPasswordReset)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if token == nil {
-		return ErrInvalidPasswordResetToken{Token: reset.Token}
+		return 0, ErrInvalidPasswordResetToken{Token: reset.Token}
 	}
 
 	user, err := GetUserByID(s, token.UserID)
 	if err != nil {
 		return
 	}
+	userID = user.ID
 
 	// Hash the password
 	user.Password, err = HashPassword(reset.NewPassword)
@@ -86,7 +89,7 @@ func ResetPassword(s *xorm.Session, reset *PasswordReset) (err error) {
 		User: user,
 	}
 
-	err = notifications.Notify(user, n)
+	err = notifications.Notify(user, n, s)
 	return
 }
 
@@ -127,6 +130,6 @@ func RequestUserPasswordResetToken(s *xorm.Session, user *User) (err error) {
 		Token: token,
 	}
 
-	err = notifications.Notify(user, n)
+	err = notifications.Notify(user, n, s)
 	return
 }

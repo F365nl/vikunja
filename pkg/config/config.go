@@ -44,6 +44,7 @@ const (
 	ServiceJWTSecret                      Key = `service.JWTSecret`
 	ServiceJWTTTL                         Key = `service.jwtttl`
 	ServiceJWTTTLLong                     Key = `service.jwtttllong`
+	ServiceJWTTTLShort                    Key = `service.jwtttlshort`
 	ServiceInterface                      Key = `service.interface`
 	ServiceUnixSocket                     Key = `service.unixsocket`
 	ServiceUnixSocketMode                 Key = `service.unixsocketmode`
@@ -115,10 +116,6 @@ const (
 	DatabaseSslRootCert           Key = `database.sslrootcert`
 	DatabaseTLS                   Key = `database.tls`
 	DatabaseSchema                Key = `database.schema`
-
-	TypesenseEnabled Key = `typesense.enabled`
-	TypesenseURL     Key = `typesense.url`
-	TypesenseAPIKey  Key = `typesense.apikey`
 
 	MailerEnabled       Key = `mailer.enabled`
 	MailerHost          Key = `mailer.host`
@@ -336,6 +333,7 @@ func InitDefaultConfig() {
 	ServiceJWTSecret.setDefault(random)
 	ServiceJWTTTL.setDefault(259200)      // 72 hours
 	ServiceJWTTTLLong.setDefault(2592000) // 30 days
+	ServiceJWTTTLShort.setDefault(600)    // 10 minutes
 	ServiceInterface.setDefault(":3456")
 	ServiceUnixSocket.setDefault("")
 	ServicePublicURL.setDefault("")
@@ -395,9 +393,6 @@ func InitDefaultConfig() {
 	DatabaseSslRootCert.setDefault("")
 	DatabaseTLS.setDefault("false")
 	DatabaseSchema.setDefault("public")
-
-	// Typesense
-	TypesenseEnabled.setDefault(false)
 
 	// Mailer
 	MailerEnabled.setDefault(false)

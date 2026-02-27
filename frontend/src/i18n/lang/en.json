@@ -94,6 +94,7 @@
         "playSoundWhenDone": "Play a sound when marking tasks as done",
         "allowIconChanges": "Show special logos during certain times",
         "alwaysShowBucketTaskCount": "Always show task count on Kanban buckets",
+        "showIncludeSubprojectsToggle": "Show \"Include subprojects\" toggle in project views",
         "defaultTaskRelationType": "Default task relation type",
         "weekStart": "Week starts on",
         "weekStartSunday": "Sunday",
@@ -212,6 +213,20 @@
           "expiresAt": "Expires at",
           "permissions": "Permissions"
         }
+      },
+      "sessions": {
+        "title": "Sessions",
+        "description": "These are all the devices currently logged into your account. You can revoke any session to log that device out. It may take up to 10 minutes for the revocation to take full effect.",
+        "deviceInfo": "Device",
+        "ipAddress": "IP Address",
+        "lastActive": "Last Active",
+        "current": "Current session",
+        "delete": {
+          "header": "Revoke session",
+          "text": "Are you sure you want to revoke this session? The device will be logged out. It may take up to 10 minutes for the session to fully expire."
+        },
+        "deleteSuccess": "Session revoked successfully. It may take up to 10 minutes for the session to fully expire.",
+        "noOtherSessions": "No other active sessions."
       }
     },
     "deletion": {

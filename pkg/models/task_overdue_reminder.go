@@ -22,6 +22,7 @@ import (
 	"code.vikunja.io/api/pkg/config"
 	"code.vikunja.io/api/pkg/cron"
 	"code.vikunja.io/api/pkg/db"
+	"code.vikunja.io/api/pkg/events"
 	"code.vikunja.io/api/pkg/log"
 	"code.vikunja.io/api/pkg/notifications"
 	"code.vikunja.io/api/pkg/user"
@@ -110,15 +111,6 @@ type userWithTasks struct {
 
 // RegisterOverdueReminderCron registers a function which checks once a day for tasks that are overdue and not done.
 func RegisterOverdueReminderCron() {
-	if !config.ServiceEnableEmailReminders.GetBool() {
-		return
-	}
-
-	if !config.MailerEnabled.GetBool() {
-		log.Info("Mailer is disabled, not sending overdue per mail")
-		return
-	}
-
 	err := cron.Schedule("* * * * *", func() {
 		s := db.NewSession()
 		defer s.Close()
@@ -145,6 +137,28 @@ func RegisterOverdueReminderCron() {
 			return
 		}
 
+		// Dispatch webhook events, deduplicated by task ID across all users
+		dispatchedTasks := make(map[int64]bool)
+		for _, ut := range uts {
+			for _, t := range ut.tasks {
+				if dispatchedTasks[t.ID] {
+					continue
+				}
+				dispatchedTasks[t.ID] = true
+				err = events.Dispatch(&TaskOverdueEvent{
+					Task:    t,
+					Project: projects[t.ProjectID],
+				})
+				if err != nil {
+					log.Errorf("[Undone Overdue Tasks Reminder] Could not dispatch overdue event for task %d: %s", t.ID, err)
+				}
+			}
+		}
+
+		if !config.ServiceEnableEmailReminders.GetBool() || !config.MailerEnabled.GetBool() {
+			return
+		}
+
 		for _, ut := range uts {
 			var n notifications.Notification = &UndoneTasksOverdueNotification{
 				User:     ut.user,
@@ -164,13 +178,17 @@ func RegisterOverdueReminderCron() {
 				}
 			}
 
-			err = notifications.Notify(ut.user, n)
+			err = notifications.Notify(ut.user, n, s)
 			if err != nil {
 				log.Errorf("[Undone Overdue Tasks Reminder] Could not notify user %d: %s", ut.user.ID, err)
 				return
 			}
 
 			log.Debugf("[Undone Overdue Tasks Reminder] Sent reminder email for %d tasks to user %d", len(ut.tasks), ut.user.ID)
+		}
+
+		if err := s.Commit(); err != nil {
+			log.Errorf("[Undone Overdue Tasks Reminder] Could not commit: %s", err)
 		}
 	})
 	if err != nil {

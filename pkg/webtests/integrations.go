@@ -123,7 +123,7 @@ func newTestRequest(t *testing.T, method string, handler func(ctx *echo.Context)
 
 func addUserTokenToContext(t *testing.T, user *user.User, c *echo.Context) {
 	// Get the token as a string
-	token, err := auth.NewUserJWTAuthtoken(user, false)
+	token, err := auth.NewUserJWTAuthtoken(user, "test-session-id")
 	require.NoError(t, err)
 	// We send the string token through the parsing function to get a valid jwt.Token
 	tken, err := jwt.Parse(token, func(_ *jwt.Token) (interface{}, error) {
@@ -217,11 +217,21 @@ func assertHandlerErrorCode(t *testing.T, err error, expectedErrorCode int) {
 	t.FailNow()
 }
 
+// httpCodeGetter is an interface for errors that can provide their HTTP status code.
+type httpCodeGetter interface {
+	GetHTTPCode() int
+}
+
 // getHTTPErrorCode extracts the HTTP status code from various error types
 func getHTTPErrorCode(err error) int {
 	// First, try domain errors that implement HTTPErrorProcessor
 	if httpErr, ok := err.(web.HTTPErrorProcessor); ok {
 		return httpErr.HTTPError().HTTPCode
+	}
+
+	// Try errors that implement httpCodeGetter (like ValidationHTTPError)
+	if codeGetter, ok := err.(httpCodeGetter); ok {
+		return codeGetter.GetHTTPCode()
 	}
 
 	// Fall back to echo.HTTPError

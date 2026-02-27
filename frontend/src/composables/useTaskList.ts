@@ -91,7 +91,6 @@ export function useTaskList(
 			set: (value) => value ? 'true' : undefined,
 		},
 	})
-	const includeSubprojectsCache = useStorage<Record<string, boolean>>('includeSubprojectsByProject', {})
 
 	watch(filter, v => { params.value.filter = v ?? '' }, { immediate: true })
 	watch(s, v => { params.value.s = v ?? '' }, { immediate: true })
@@ -106,38 +105,6 @@ export function useTaskList(
 
 		return formatSortOrder(sortBy.value, loadParams)
 	})
-
-	watch(
-		projectId,
-		(newProjectId) => {
-			if (newProjectId <= 0) {
-				includeSubprojects.value = false
-				return
-			}
-			const cached = includeSubprojectsCache.value[newProjectId]
-			if (typeof cached === 'boolean') {
-				includeSubprojects.value = cached
-			}
-		},
-		{immediate: true},
-	)
-
-	watch(
-		[projectId, includeSubprojects],
-		([newProjectId, includeSubprojectsValue]) => {
-			if (newProjectId <= 0) {
-				return
-			}
-			if (includeSubprojectsCache.value[newProjectId] === includeSubprojectsValue) {
-				return
-			}
-			includeSubprojectsCache.value = {
-				...includeSubprojectsCache.value,
-				[newProjectId]: includeSubprojectsValue,
-			}
-		},
-		{immediate: true},
-	)
 
 	watch(
 		[params, sortBy, page, includeSubprojects],
