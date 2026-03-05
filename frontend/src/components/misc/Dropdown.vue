@@ -68,11 +68,9 @@ defineSlots<{
 
 const initialMount = ref(false)
 const open = ref(false)
-
 const dropdown = ref<HTMLElement>()
 const dropdownMenu = ref<HTMLElement>()
 const dropdownPosition = ref({x: 0, y: 0})
-const dropdownMenuOffset = computed(() => 4)
 
 function close() {
 	open.value = false
@@ -89,7 +87,7 @@ async function updatePosition() {
 		placement: 'bottom-end',
 		strategy: 'absolute',
 		middleware: [
-			offset(dropdownMenuOffset.value),
+			offset(4),
 			autoPlacement({
 				allowedPlacements: ['bottom-end', 'top-end', 'bottom-start', 'top-start'],
 				padding: 8,
@@ -104,7 +102,6 @@ async function updatePosition() {
 const dropdownMenuStyle = computed(() => ({
 	left: `${dropdownPosition.value.x}px`,
 	top: `${dropdownPosition.value.y}px`,
-	'--hover-offset': `${dropdownMenuOffset.value}px`,
 }))
 
 function toggleOpen() {
@@ -130,12 +127,6 @@ onClickOutside(dropdown, (e) => {
 .dropdown {
 	display: inline-flex;
 	position: relative;
-}
-
-.dropdown-menu::before {
-  content: "";
-  position: absolute;
-  inset: calc(var(--hover-offset) * -1);
 }
 
 .dropdown-menu {
