@@ -1,5 +1,6 @@
 import {ref, shallowReactive, watch, computed, type ComputedGetter} from 'vue'
 import {useRouteQuery} from '@vueuse/router'
+import {useStorage} from '@vueuse/core'
 
 import TaskCollectionService, {
 	type ExpandTaskFilterParam,
