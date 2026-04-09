@@ -73,8 +73,13 @@ async function uploadAttachmentAndVerify(page: Page, taskId: number) {
 	const uploadAttachmentPromise = page.waitForResponse(response =>
 		response.url().includes(`/tasks/${taskId}/attachments`) && response.request().method() === 'PUT',
 	)
+	// The "Add Attachments" button triggers openFilePicker() which may open
+	// a native file chooser (especially inside a <dialog>). Handle it via the
+	// filechooser event so it doesn't block the test.
+	const fileChooserPromise = page.waitForEvent('filechooser')
 	await page.locator('.task-view .action-buttons .button').filter({hasText: 'Add Attachments'}).click()
-	await page.locator('input[type=file]#files').setInputFiles('tests/fixtures/image.jpg')
+	const fileChooser = await fileChooserPromise
+	await fileChooser.setFiles('tests/fixtures/image.jpg')
 	await uploadAttachmentPromise
 
 	await expect(page.locator('.attachments .attachments .files button.attachment')).toBeVisible()
@@ -90,8 +95,6 @@ test.describe('Task', () => {
 		buckets = await BucketFactory.create(1, {
 			project_view_id: views[3].id,
 		}) as Bucket[]
-		await TaskFactory.truncate()
-		await UserProjectFactory.truncate()
 	})
 
 	test('Should be created new', async ({authenticatedPage: page}) => {
@@ -185,12 +188,6 @@ test.describe('Task', () => {
 	})
 
 	test.describe('Task Detail View', () => {
-		test.beforeEach(async ({authenticatedPage: page}) => {
-			await TaskCommentFactory.truncate()
-			await LabelTaskFactory.truncate()
-			await TaskAttachmentFactory.truncate()
-		})
-
 		test('provides back navigation to the project in the list view', async ({authenticatedPage: page}) => {
 			const tasks = await TaskFactory.create(1)
 			const loadTasksPromise = page.waitForResponse(response =>
@@ -217,7 +214,7 @@ test.describe('Task', () => {
 			await expect(page).toHaveURL(/\/projects\/1\/\d+/)
 		})
 
-		test('provides back navigation to the project in the kanban view on mobile', async ({authenticatedPage: page}) => {
+		test('provides close navigation to the project in the kanban view on mobile', async ({authenticatedPage: page}) => {
 			await page.setViewportSize({width: 375, height: 667}) // iphone-8
 
 			const tasks = await TaskFactory.create(1, {
@@ -237,8 +234,9 @@ test.describe('Task', () => {
 			const taskLocator = page.locator('.kanban-view .tasks .task').first()
 			await expect(taskLocator).toBeVisible({timeout: 10000})
 			await taskLocator.click()
-			await expect(page.locator('.task-view .back-button')).toBeVisible()
-			await page.locator('.task-view .back-button').click()
+			// On mobile, the task opens as a modal with a close button instead of a back button
+			await expect(page.locator('.task-view .task-properties .close')).toBeVisible()
+			await page.locator('.task-view .task-properties .close').click()
 			await expect(page).toHaveURL(/\/projects\/\d+\/\d+/)
 		})
 
@@ -423,9 +421,9 @@ test.describe('Task', () => {
 
 		test('Can move a task to another project', async ({authenticatedPage: page}) => {
 			const projects = await ProjectFactory.create(2)
-			const views = await createDefaultViews(projects[0].id)
+			const views = await createDefaultViews(projects[0].id, 10)
 			// Also create views for the target project
-			await createDefaultViews(projects[1].id)
+			await createDefaultViews(projects[1].id, 14)
 			await BucketFactory.create(2, {
 				project_view_id: views[3].id,
 			})
@@ -457,16 +455,14 @@ test.describe('Task', () => {
 
 			await expect(page.locator('.task-view .action-buttons .button').filter({hasText: 'Delete'})).toBeVisible()
 			await page.locator('.task-view .action-buttons .button').filter({hasText: 'Delete'}).click()
-			await expect(page.locator('.modal-mask .modal-container .modal-content .modal-header')).toContainText('Delete this task')
-			await page.locator('.modal-mask .modal-container .modal-content .actions .button').filter({hasText: 'Do it!'}).click()
+			await expect(page.locator('dialog[open] .modal-content .modal-header')).toContainText('Delete this task')
+			await page.locator('dialog[open] .modal-content .actions .button').filter({hasText: 'Do it!'}).click()
 
 			await expect(page.locator('.global-notification')).toContainText('Success')
 			await expect(page).toHaveURL(new RegExp(`/projects/${tasks[0].project_id}/`))
 		})
 
 		test('Can add an assignee to a task', async ({authenticatedPage: page}) => {
-			await TaskAssigneeFactory.truncate()
-
 			// Create users with IDs starting at 100 to avoid conflict with logged-in user (ID 1)
 			// Don't truncate to preserve the authenticated user from the fixture
 			const users = await UserFactory.create(5, {
@@ -532,7 +528,6 @@ test.describe('Task', () => {
 				id: 1,
 				project_id: 1,
 			})
-			await LabelFactory.truncate()
 			const newLabelText = 'some new label'
 
 			await page.goto(`/tasks/${tasks[0].id}`)
@@ -553,7 +548,6 @@ test.describe('Task', () => {
 				project_id: 1,
 			})
 			const labels = await LabelFactory.create(1)
-			await LabelTaskFactory.truncate()
 
 			await page.goto(`/tasks/${tasks[0].id}`)
 
@@ -566,7 +560,6 @@ test.describe('Task', () => {
 				project_id: projects[0].id,
 			})
 			const labels = await LabelFactory.create(1)
-			await LabelTaskFactory.truncate()
 			await TaskBucketFactory.create(1, {
 				task_id: tasks[0].id,
 				bucket_id: buckets[0].id,
@@ -579,7 +572,7 @@ test.describe('Task', () => {
 
 			await addLabelToTaskAndVerify(page, labels[0].title)
 
-			await page.locator('.modal-container > .close').click()
+			await page.locator('dialog[open] .modal-container > .close').click()
 
 			await expect(page.locator('.bucket .task')).toContainText(labels[0].title)
 		})
@@ -716,7 +709,6 @@ test.describe('Task', () => {
 		})
 
 		test('Can paste an image into the description editor which uploads it as an attachment', async ({authenticatedPage: page}) => {
-			await TaskAttachmentFactory.truncate()
 			const tasks = await TaskFactory.create(1, {
 				id: 1,
 			}) as Task[]
@@ -739,7 +731,6 @@ test.describe('Task', () => {
 		})
 
 		test('Can set a reminder', async ({authenticatedPage: page}) => {
-			await TaskReminderFactory.truncate()
 			const tasks = await TaskFactory.create(1, {
 				id: 1,
 				done: false,
@@ -750,12 +741,14 @@ test.describe('Task', () => {
 			await page.locator('.task-view .columns.details .column button').filter({hasText: 'Add a reminder'}).click()
 			await page.locator('.datepicker__quick-select-date').filter({hasText: 'Tomorrow'}).click()
 
+			const openPopup = page.locator('.reminder-options-popup.is-open')
+			await openPopup.locator('button').filter({hasText: 'Confirm'}).click()
+
 			await expect(page.locator('.reminder-options-popup.is-open')).not.toBeVisible()
 			await expect(page.locator('.global-notification')).toContainText('Success')
 		})
 
 		test('Allows to set a relative reminder when the task already has a due date', async ({authenticatedPage: page}) => {
-			await TaskReminderFactory.truncate()
 			const tasks = await TaskFactory.create(1, {
 				id: 1,
 				done: false,
@@ -776,7 +769,6 @@ test.describe('Task', () => {
 		})
 
 		test('Allows to set a relative reminder when the task already has a start date', async ({authenticatedPage: page}) => {
-			await TaskReminderFactory.truncate()
 			const tasks = await TaskFactory.create(1, {
 				id: 1,
 				done: false,
@@ -797,7 +789,6 @@ test.describe('Task', () => {
 		})
 
 		test('Allows to set a custom relative reminder when the task already has a due date', async ({authenticatedPage: page}) => {
-			await TaskReminderFactory.truncate()
 			const tasks = await TaskFactory.create(1, {
 				id: 1,
 				done: false,
@@ -822,7 +813,6 @@ test.describe('Task', () => {
 		})
 
 		test('Allows to set a fixed reminder when the task already has a due date', async ({authenticatedPage: page}) => {
-			await TaskReminderFactory.truncate()
 			const tasks = await TaskFactory.create(1, {
 				id: 1,
 				done: false,
@@ -840,8 +830,72 @@ test.describe('Task', () => {
 			await expect(openPopup.locator('.datepicker__quick-select-date').first()).toBeVisible()
 			await openPopup.locator('.datepicker__quick-select-date').filter({hasText: 'Tomorrow'}).click()
 
+			await openPopup.locator('button').filter({hasText: 'Confirm'}).click()
+
 			await expect(page.locator('.reminder-options-popup.is-open')).not.toBeVisible()
 			await expect(page.locator('.global-notification')).toContainText('Success')
+		})
+
+		test('Does not auto-save when clicking a date in the absolute reminder picker', async ({authenticatedPage: page}) => {
+			const tasks = await TaskFactory.create(1, {
+				id: 1,
+				done: false,
+			})
+			await page.goto(`/tasks/${tasks[0].id}`)
+
+			await page.locator('.task-view .action-buttons .button').filter({hasText: 'Set Reminders'}).click()
+			await page.locator('.task-view .columns.details .column button').filter({hasText: 'Add a reminder'}).click()
+
+			const openPopup = page.locator('.reminder-options-popup.is-open')
+			// Wait for the flatpickr calendar to appear
+			await expect(openPopup.locator('.flatpickr-innerContainer')).toBeVisible()
+
+			// Track whether any task save request fires
+			let saveRequestFired = false
+			await page.route('**/api/v1/tasks/*', async (route) => {
+				if (route.request().method() === 'POST' || route.request().method() === 'PUT') {
+					saveRequestFired = true
+				}
+				await route.continue()
+			})
+
+			// Click a day in the calendar
+			await openPopup.locator('.flatpickr-innerContainer .flatpickr-days .flatpickr-day:not(.flatpickr-disabled)').first().click()
+
+			// Wait a moment to ensure no request fires
+			await page.waitForTimeout(1000)
+			expect(saveRequestFired).toBe(false)
+
+			// The popup should still be open
+			await expect(openPopup).toBeVisible()
+
+			// The Confirm button should be visible
+			const confirmButton = openPopup.locator('button').filter({hasText: 'Confirm'})
+			await expect(confirmButton).toBeVisible()
+
+			// Now click Confirm — this should trigger the save
+			await confirmButton.click()
+
+			await expect(page.locator('.global-notification')).toContainText('Success')
+		})
+
+		test('Shows Confirm button for absolute date reminder when task has no due date', async ({authenticatedPage: page}) => {
+			// Task with no due_date — defaultRelativeTo will be null
+			const tasks = await TaskFactory.create(1, {
+				id: 1,
+				done: false,
+			})
+			await page.goto(`/tasks/${tasks[0].id}`)
+
+			await page.locator('.task-view .action-buttons .button').filter({hasText: 'Set Reminders'}).click()
+			await page.locator('.task-view .columns.details .column button').filter({hasText: 'Add a reminder'}).click()
+
+			const openPopup = page.locator('.reminder-options-popup.is-open')
+			// When no due date, the absolute date form should show directly
+			await expect(openPopup.locator('.flatpickr-innerContainer')).toBeVisible()
+
+			// The Confirm button must be visible
+			await expect(openPopup.locator('button').filter({hasText: 'Confirm'})).toBeVisible()
 		})
 
 		test('Can set a priority for a task', async ({authenticatedPage: page}) => {
@@ -874,7 +928,6 @@ test.describe('Task', () => {
 		})
 
 		test('Can add an attachment to a task', async ({authenticatedPage: page}) => {
-			await TaskAttachmentFactory.truncate()
 			const tasks = await TaskFactory.create(1, {
 				id: 1,
 			})
@@ -884,13 +937,11 @@ test.describe('Task', () => {
 		})
 
 		test('Can add an attachment to a task and see it appearing on kanban', async ({authenticatedPage: page}) => {
-			await TaskAttachmentFactory.truncate()
 			const tasks = await TaskFactory.create(1, {
 				id: 1,
 				project_id: projects[0].id,
 			})
 			const labels = await LabelFactory.create(1)
-			await LabelTaskFactory.truncate()
 			await TaskBucketFactory.create(1, {
 				task_id: tasks[0].id,
 				bucket_id: buckets[0].id,
@@ -903,7 +954,7 @@ test.describe('Task', () => {
 
 			await uploadAttachmentAndVerify(page, tasks[0].id)
 
-			await page.locator('.modal-container > .close').click()
+			await page.locator('dialog[open] .modal-container > .close').click()
 
 			await expect(page.locator('.bucket .task .footer .icon svg.fa-paperclip')).toBeVisible()
 		})
@@ -1046,8 +1097,6 @@ test.describe('Task', () => {
 		})
 
 		test('Should render an image from attachment', async ({authenticatedPage: page, apiContext}) => {
-			await TaskAttachmentFactory.truncate()
-
 			const tasks = await TaskFactory.create(1, {
 				id: 1,
 				description: '',

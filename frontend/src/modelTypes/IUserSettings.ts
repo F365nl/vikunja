@@ -1,7 +1,6 @@
-
 import type {IAbstract} from './IAbstract'
 import type {IProject} from './IProject'
-import type {PrefixMode} from '@/modules/parseTaskText'
+import type {PrefixMode} from '@/modules/quickAddMagic'
 import type {BasicColorSchema} from '@vueuse/core'
 import type {SupportedLocale} from '@/i18n'
 import type {DefaultProjectViewKind} from '@/modelTypes/IProjectView'
@@ -23,8 +22,10 @@ export interface IFrontendSettings {
 	defaultTaskRelationType: IRelationKind
 	backgroundBrightness: number | null
 	alwaysShowBucketTaskCount: boolean
+	showLastViewed: boolean
 	sidebarWidth: number | null
 	commentSortOrder: 'asc' | 'desc'
+	desktopQuickEntryShortcut: string
 }
 
 export interface IExtraSettingsLink {

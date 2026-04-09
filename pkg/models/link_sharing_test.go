@@ -45,6 +45,7 @@ func TestLinkSharing_Create(t *testing.T) {
 		assert.NotEmpty(t, share.Hash)
 		assert.NotEmpty(t, share.ID)
 		assert.Equal(t, SharingTypeWithoutPassword, share.SharingType)
+		require.NoError(t, s.Commit())
 		db.AssertExists(t, "link_shares", map[string]interface{}{
 			"id": share.ID,
 		}, false)
@@ -79,6 +80,7 @@ func TestLinkSharing_Create(t *testing.T) {
 		assert.NotEmpty(t, share.Hash)
 		assert.NotEmpty(t, share.ID)
 		assert.Empty(t, share.Password)
+		require.NoError(t, s.Commit())
 		db.AssertExists(t, "link_shares", map[string]interface{}{
 			"id":           share.ID,
 			"sharing_type": SharingTypeWithPassword,
@@ -120,6 +122,32 @@ func TestLinkSharing_ReadAll(t *testing.T) {
 		require.NoError(t, err)
 		assert.Len(t, shares, 1)
 		assert.Equal(t, int64(4), shares[0].ID)
+	})
+	t.Run("should forbid read-only users from listing link shares", func(t *testing.T) {
+		db.LoadAndAssertFixtures(t)
+		s := db.NewSession()
+		defer s.Close()
+
+		// User 1 has only read access to project 3
+		share := &LinkSharing{
+			ProjectID: 3,
+		}
+		_, _, _, err := share.ReadAll(s, doer, "", 1, -1)
+		require.Error(t, err)
+		assert.True(t, IsErrGenericForbidden(err))
+	})
+	t.Run("should forbid write users from listing link shares", func(t *testing.T) {
+		db.LoadAndAssertFixtures(t)
+		s := db.NewSession()
+		defer s.Close()
+
+		// User 1 has write access to project 10
+		share := &LinkSharing{
+			ProjectID: 10,
+		}
+		_, _, _, err := share.ReadAll(s, doer, "", 1, -1)
+		require.Error(t, err)
+		assert.True(t, IsErrGenericForbidden(err))
 	})
 }
 

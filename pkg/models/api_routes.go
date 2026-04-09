@@ -29,6 +29,12 @@ var apiTokenRoutes = map[string]APITokenRoute{}
 
 func init() {
 	apiTokenRoutes = make(map[string]APITokenRoute)
+	apiTokenRoutes["caldav"] = APITokenRoute{
+		"access": &RouteDetail{
+			Path:   "/dav/*",
+			Method: "ANY",
+		},
+	}
 }
 
 type APITokenRoute map[string]*RouteDetail
@@ -150,6 +156,14 @@ func isStandardCRUDRoute(routeGroupName string, routeParts []string, _ string) b
 	// Check if this is a standard CRUD resource
 	if crudResources[routeGroupName] {
 		return true
+	}
+
+	// Check if this is a bulk variant of a known CRUD resource
+	if strings.HasSuffix(routeGroupName, "_bulk") {
+		parent := strings.TrimSuffix(routeGroupName, "_bulk")
+		if crudResources[parent] {
+			return true
+		}
 	}
 
 	// Also check the base resource for nested paths

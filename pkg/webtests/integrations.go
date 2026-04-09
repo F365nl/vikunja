@@ -53,11 +53,25 @@ var (
 		Email:    "user1@example.com",
 		Issuer:   "local",
 	}
+	testuser10 = user.User{
+		ID:       10,
+		Username: "user10",
+		Password: "$2a$14$dcadBoMBL9jQoOcZK8Fju.cy0Ptx2oZECkKLnaa8ekRoTFe1w7To.",
+		Email:    "user10@example.com",
+		Issuer:   "local",
+	}
 	testuser15 = user.User{
 		ID:       15,
 		Username: "user15",
 		Password: "$2a$14$dcadBoMBL9jQoOcZK8Fju.cy0Ptx2oZECkKLnaa8ekRoTFe1w7To.",
 		Email:    "user15@example.com",
+		Issuer:   "local",
+	}
+	testuser6 = user.User{
+		ID:       6,
+		Username: "user6",
+		Password: "$2a$14$dcadBoMBL9jQoOcZK8Fju.cy0Ptx2oZECkKLnaa8ekRoTFe1w7To.",
+		Email:    "user6@example.com",
 		Issuer:   "local",
 	}
 )
@@ -123,11 +137,11 @@ func newTestRequest(t *testing.T, method string, handler func(ctx *echo.Context)
 
 func addUserTokenToContext(t *testing.T, user *user.User, c *echo.Context) {
 	// Get the token as a string
-	token, err := auth.NewUserJWTAuthtoken(user, false)
+	token, err := auth.NewUserJWTAuthtoken(user, "test-session-id")
 	require.NoError(t, err)
 	// We send the string token through the parsing function to get a valid jwt.Token
 	tken, err := jwt.Parse(token, func(_ *jwt.Token) (interface{}, error) {
-		return []byte(config.ServiceJWTSecret.GetString()), nil
+		return []byte(config.ServiceSecret.GetString()), nil
 	})
 	require.NoError(t, err)
 	c.Set("user", tken)
@@ -139,7 +153,7 @@ func addLinkShareTokenToContext(t *testing.T, share *models.LinkSharing, c *echo
 	require.NoError(t, err)
 	// We send the string token through the parsing function to get a valid jwt.Token
 	tken, err := jwt.Parse(token, func(_ *jwt.Token) (interface{}, error) {
-		return []byte(config.ServiceJWTSecret.GetString()), nil
+		return []byte(config.ServiceSecret.GetString()), nil
 	})
 	require.NoError(t, err)
 	c.Set("user", tken)
@@ -217,11 +231,21 @@ func assertHandlerErrorCode(t *testing.T, err error, expectedErrorCode int) {
 	t.FailNow()
 }
 
+// httpCodeGetter is an interface for errors that can provide their HTTP status code.
+type httpCodeGetter interface {
+	GetHTTPCode() int
+}
+
 // getHTTPErrorCode extracts the HTTP status code from various error types
 func getHTTPErrorCode(err error) int {
 	// First, try domain errors that implement HTTPErrorProcessor
 	if httpErr, ok := err.(web.HTTPErrorProcessor); ok {
 		return httpErr.HTTPError().HTTPCode
+	}
+
+	// Try errors that implement httpCodeGetter (like ValidationHTTPError)
+	if codeGetter, ok := err.(httpCodeGetter); ok {
+		return codeGetter.GetHTTPCode()
 	}
 
 	// Fall back to echo.HTTPError

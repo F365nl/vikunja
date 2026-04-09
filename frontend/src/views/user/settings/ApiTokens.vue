@@ -41,6 +41,86 @@ const route = useRoute()
 
 const now = new Date()
 
+interface TokenPreset {
+	id: string
+	groups: Record<string, string[] | '*'>
+}
+
+const presets: TokenPreset[] = [
+	{
+		id: 'readOnly',
+		groups: {
+			'*': ['read_one', 'read_all'],
+		},
+	},
+	{
+		id: 'tasks',
+		groups: {
+			'tasks': '*',
+			'tasks_attachments': '*',
+			'tasks_assignees': '*',
+			'tasks_labels': '*',
+			'tasks_comments': '*',
+			'tasks_relations': '*',
+			'labels': ['read_one', 'read_all', 'create'],
+			'projects': ['read_one', 'read_all', 'views_buckets_tasks'],
+			'projects_views': ['read_one', 'read_all'],
+			'projects_views_tasks': ['read_one', 'read_all'],
+		},
+	},
+	{
+		id: 'projects',
+		groups: {
+			'projects': '*',
+			'projects_views': '*',
+			'projects_teams': '*',
+			'projects_users': '*',
+			'projects_shares': '*',
+			'projects_webhooks': '*',
+			'projects_buckets': '*',
+			'projects_views_tasks': '*',
+			'tasks': ['read_one', 'read_all'],
+			'teams': ['read_one', 'read_all'],
+		},
+	},
+	{
+		id: 'fullAccess',
+		groups: {
+			'*': '*',
+		},
+	},
+]
+
+function applyPreset(preset: TokenPreset) {
+	resetPermissions()
+
+	for (const [groupKey, permissions] of Object.entries(preset.groups)) {
+		if (groupKey === '*') {
+			// Apply to all groups
+			for (const group of Object.keys(availableRoutes.value)) {
+				applyPermissionsToGroup(group, permissions)
+			}
+		} else if (availableRoutes.value[groupKey]) {
+			applyPermissionsToGroup(groupKey, permissions)
+		}
+	}
+}
+
+function applyPermissionsToGroup(group: string, permissions: string[] | '*') {
+	if (permissions === '*') {
+		// Select all permissions in this group
+		selectPermissionGroup(group, true)
+		newTokenPermissionsGroup.value[group] = true
+	} else {
+		for (const perm of permissions) {
+			if (newTokenPermissions.value[group]?.[perm] !== undefined) {
+				newTokenPermissions.value[group][perm] = true
+			}
+		}
+		toggleGroupPermissionsFromChild(group, true)
+	}
+}
+
 const flatPickerConfig = computed(() => ({
 	altFormat: t('date.altFormatLong'),
 	altInput: true,
@@ -217,60 +297,62 @@ function toggleGroupPermissionsFromChild(group: string, checked: boolean) {
 			.
 		</p>
 
-		<table
+		<div
 			v-if="tokens.length > 0"
-			class="table"
+			class="has-horizontal-overflow"
 		>
-			<thead>
-				<tr>
-					<th>{{ $t('misc.id') }}</th>
-					<th>{{ $t('user.settings.apiTokens.attributes.title') }}</th>
-					<th>{{ $t('user.settings.apiTokens.attributes.permissions') }}</th>
-					<th>{{ $t('user.settings.apiTokens.attributes.expiresAt') }}</th>
-					<th>{{ $t('misc.created') }}</th>
-					<th class="has-text-end">
-						{{ $t('misc.actions') }}
-					</th>
-				</tr>
-			</thead>
-			<tbody>
-				<tr
-					v-for="tk in tokens"
-					:key="tk.id"
-				>
-					<td>{{ tk.id }}</td>
-					<td>{{ tk.title }}</td>
-					<td class="is-capitalized">
-						<template
-							v-for="(v, p) in tk.permissions"
-							:key="'permission-' + p"
-						>
-							<strong>{{ formatPermissionTitle(p) }}:</strong>
-							{{ v.map(formatPermissionTitle).join(', ') }}
-							<br>
-						</template>
-					</td>
-					<td>
-						{{ formatDisplayDate(tk.expiresAt) }}
-						<p
-							v-if="tk.expiresAt < new Date()"
-							class="has-text-danger"
-						>
-							{{ $t('user.settings.apiTokens.expired', {ago: formatDateSince(tk.expiresAt)}) }}
-						</p>
-					</td>
-					<td>{{ formatDisplayDate(tk.created) }}</td>
-					<td class="has-text-end">
-						<XButton
-							variant="secondary"
-							@click="() => {tokenToDelete = tk; showDeleteModal = true}"
-						>
-							{{ $t('misc.delete') }}
-						</XButton>
-					</td>
-				</tr>
-			</tbody>
-		</table>
+			<table class="table">
+				<thead>
+					<tr>
+						<th>{{ $t('misc.id') }}</th>
+						<th>{{ $t('user.settings.apiTokens.attributes.title') }}</th>
+						<th>{{ $t('user.settings.apiTokens.attributes.permissions') }}</th>
+						<th>{{ $t('user.settings.apiTokens.attributes.expiresAt') }}</th>
+						<th>{{ $t('misc.created') }}</th>
+						<th class="has-text-end">
+							{{ $t('misc.actions') }}
+						</th>
+					</tr>
+				</thead>
+				<tbody>
+					<tr
+						v-for="tk in tokens"
+						:key="tk.id"
+					>
+						<td>{{ tk.id }}</td>
+						<td>{{ tk.title }}</td>
+						<td class="is-capitalized">
+							<template
+								v-for="(v, p) in tk.permissions"
+								:key="'permission-' + p"
+							>
+								<strong>{{ formatPermissionTitle(p) }}:</strong>
+								{{ v.map(formatPermissionTitle).join(', ') }}
+								<br>
+							</template>
+						</td>
+						<td>
+							{{ formatDisplayDate(tk.expiresAt) }}
+							<p
+								v-if="tk.expiresAt < new Date()"
+								class="has-text-danger"
+							>
+								{{ $t('user.settings.apiTokens.expired', {ago: formatDateSince(tk.expiresAt)}) }}
+							</p>
+						</td>
+						<td>{{ formatDisplayDate(tk.created) }}</td>
+						<td class="has-text-end">
+							<XButton
+								variant="secondary"
+								@click="() => {tokenToDelete = tk; showDeleteModal = true}"
+							>
+								{{ $t('misc.delete') }}
+							</XButton>
+						</td>
+					</tr>
+				</tbody>
+			</table>
+		</div>
 
 		<form
 			v-if="showCreateForm"
@@ -332,6 +414,26 @@ function toggleGroupPermissionsFromChild(group: string, checked: boolean) {
 			<div class="field">
 				<label class="label">{{ $t('user.settings.apiTokens.attributes.permissions') }}</label>
 				<p>{{ $t('user.settings.apiTokens.permissionExplanation') }}</p>
+
+				<!-- Presets -->
+				<div class="preset-buttons mbe-4">
+					<label class="label">{{ $t('user.settings.apiTokens.presets.title') }}</label>
+					<div
+						class="is-flex"
+						style="gap: .5rem; flex-wrap: wrap;"
+					>
+						<XButton
+							v-for="preset in presets"
+							:key="preset.id"
+							variant="secondary"
+							type="button"
+							@click="applyPreset(preset)"
+						>
+							{{ $t(`user.settings.apiTokens.presets.${preset.id}`) }}
+						</XButton>
+					</div>
+				</div>
+
 				<div
 					v-for="(routes, group) in availableRoutes"
 					:key="group"
@@ -373,7 +475,7 @@ function toggleGroupPermissionsFromChild(group: string, checked: boolean) {
 			</p>
 			<XButton
 				:loading="service.loading"
-				@click="createToken"
+				type="submit"
 			>
 				{{ $t('user.settings.apiTokens.createToken') }}
 			</XButton>

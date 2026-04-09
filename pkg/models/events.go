@@ -176,6 +176,43 @@ func (t *TaskPositionsRecalculatedEvent) Name() string {
 	return "task.positions.recalculated"
 }
 
+// TaskReminderFiredEvent represents an event where a task reminder has fired
+type TaskReminderFiredEvent struct {
+	Task     *Task         `json:"task"`
+	User     *user.User    `json:"user"`
+	Project  *Project      `json:"project"`
+	Reminder *TaskReminder `json:"reminder"`
+}
+
+// Name defines the name for TaskReminderFiredEvent
+func (t *TaskReminderFiredEvent) Name() string {
+	return "task.reminder.fired"
+}
+
+// TaskOverdueEvent represents an event where a task is overdue
+type TaskOverdueEvent struct {
+	Task    *Task      `json:"task"`
+	User    *user.User `json:"user"`
+	Project *Project   `json:"project"`
+}
+
+// Name defines the name for TaskOverdueEvent
+func (t *TaskOverdueEvent) Name() string {
+	return "task.overdue"
+}
+
+// TasksOverdueEvent represents an event where multiple tasks are overdue for a user
+type TasksOverdueEvent struct {
+	Tasks    []*Task            `json:"tasks"`
+	User     *user.User         `json:"user"`
+	Projects map[int64]*Project `json:"projects"`
+}
+
+// Name defines the name for TasksOverdueEvent
+func (t *TasksOverdueEvent) Name() string {
+	return "tasks.overdue"
+}
+
 ////////////////////
 // Project Events //
 ////////////////////
@@ -299,4 +336,29 @@ type UserDataExportRequestedEvent struct {
 // Name defines the name for UserDataExportRequestedEvent
 func (t *UserDataExportRequestedEvent) Name() string {
 	return "user.export.requested"
+}
+
+/////////////////////
+// Webhook Events  //
+/////////////////////
+
+// WebhookDeliveryEvent is an internal event used to fan out a single
+// webhook delivery. One of these is dispatched per matching webhook by
+// WebhookListener; the WebhookDeliveryListener performs the actual HTTP
+// call. This event is intentionally not exposed via RegisterEventForWebhook
+// — users cannot subscribe to it.
+type WebhookDeliveryEvent struct {
+	// WebhookID is the id of the webhook row to deliver to. The delivery
+	// listener loads the webhook at delivery time so secrets are never
+	// embedded in the message bus.
+	WebhookID int64 `json:"webhook_id"`
+	// Payload is the fully prepared webhook payload, including the already
+	// expanded event.Data map. Build-once semantics: retries replay the
+	// same payload rather than rebuilding it.
+	Payload *WebhookPayload `json:"payload"`
+}
+
+// Name defines the name for WebhookDeliveryEvent
+func (w *WebhookDeliveryEvent) Name() string {
+	return "webhook.delivery"
 }

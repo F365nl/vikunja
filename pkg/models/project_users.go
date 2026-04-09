@@ -115,14 +115,11 @@ func (lu *ProjectUser) Create(s *xorm.Session, a web.Auth) (err error) {
 		return err
 	}
 
-	err = events.Dispatch(&ProjectSharedWithUserEvent{
+	events.DispatchOnCommit(s, &ProjectSharedWithUserEvent{
 		Project: l,
 		User:    u,
 		Doer:    a,
 	})
-	if err != nil {
-		return err
-	}
 
 	err = updateProjectLastUpdated(s, l)
 	return
@@ -145,7 +142,7 @@ func (lu *ProjectUser) Delete(s *xorm.Session, _ web.Auth) (err error) {
 
 	// Check if the user exists
 	u, err := user.GetUserByUsername(s, lu.Username)
-	if err != nil {
+	if err != nil && !user.IsErrUserStatusError(err) {
 		return
 	}
 	lu.UserID = u.ID
@@ -252,7 +249,7 @@ func (lu *ProjectUser) Update(s *xorm.Session, _ web.Auth) (err error) {
 
 	// Check if the user exists
 	u, err := user.GetUserByUsername(s, lu.Username)
-	if err != nil {
+	if err != nil && !user.IsErrUserStatusError(err) {
 		return err
 	}
 	lu.UserID = u.ID

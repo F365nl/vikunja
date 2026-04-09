@@ -108,6 +108,15 @@
 			<div class="field">
 				<label class="checkbox">
 					<input
+						v-model="settings.frontendSettings.showLastViewed"
+						type="checkbox"
+					>
+					{{ $t('user.settings.general.showLastViewed') }}
+				</label>
+			</div>
+			<div class="field">
+				<label class="checkbox">
+					<input
 						v-model="settings.emailRemindersEnabled"
 						type="checkbox"
 					>
@@ -343,6 +352,30 @@
 	</Card>
 
 	<Card
+		v-if="isDesktop"
+		:title="$t('user.settings.sections.desktop')"
+		class="general-settings section-block"
+		:loading="loading"
+	>
+		<div class="field-group">
+			<div class="field">
+				<label
+					:for="`quickEntryShortcut${id}`"
+					class="two-col"
+				>
+					<span>
+						{{ $t('user.settings.desktop.quickEntryShortcut') }}
+					</span>
+					<ShortcutRecorder
+						v-model="settings.frontendSettings.desktopQuickEntryShortcut"
+						@update:modelValue="updateSettings"
+					/>
+				</label>
+			</div>
+		</div>
+	</Card>
+
+	<Card
 		:title="$t('user.settings.sections.privacy')"
 		class="general-settings section-block"
 		:loading="loading"
@@ -390,7 +423,7 @@ import {computed, watch, ref, onBeforeMount} from 'vue'
 import {useI18n} from 'vue-i18n'
 import isEqual from 'fast-deep-equal'
 
-import {PrefixMode} from '@/modules/parseTaskText'
+import {PrefixMode} from '@/modules/quickAddMagic'
 
 import ProjectSearch from '@/components/tasks/partials/ProjectSearch.vue'
 import Multiselect from '@/components/input/Multiselect.vue'
@@ -412,8 +445,12 @@ import {PRIORITIES} from '@/constants/priorities'
 import {DATE_DISPLAY} from '@/constants/dateDisplay'
 import {TIME_FORMAT} from '@/constants/timeFormat'
 import {RELATION_KINDS} from '@/types/IRelationKind'
+import {isDesktopApp} from '@/helpers/desktopAuth'
+import ShortcutRecorder from '@/components/misc/ShortcutRecorder.vue'
 
 defineOptions({name: 'UserSettingsGeneral'})
+
+const isDesktop = isDesktopApp()
 
 const {t} = useI18n({useScope: 'global'})
 useTitle(() => `${t('user.settings.general.title')} - ${t('user.settings.title')}`)

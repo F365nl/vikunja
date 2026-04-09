@@ -17,8 +17,8 @@
 package models
 
 import (
-	"context"
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"time"
 
@@ -70,12 +70,6 @@ func RegisterListeners() {
 	events.RegisterListener((&TaskCreatedEvent{}).Name(), &UpdateTaskInSavedFilterViews{})
 	events.RegisterListener((&TaskUpdatedEvent{}).Name(), &UpdateTaskInSavedFilterViews{})
 	events.RegisterListener((&TaskCommentCreatedEvent{}).Name(), &MarkTaskUnreadOnComment{})
-	if config.TypesenseEnabled.GetBool() {
-		events.RegisterListener((&TaskDeletedEvent{}).Name(), &RemoveTaskFromTypesense{})
-		events.RegisterListener((&TaskCreatedEvent{}).Name(), &AddTaskToTypesense{})
-		events.RegisterListener((&TaskUpdatedEvent{}).Name(), &UpdateTaskInTypesense{})
-		events.RegisterListener((&TaskPositionsRecalculatedEvent{}).Name(), &UpdateTaskPositionsInTypesense{})
-	}
 	if config.WebhooksEnabled.GetBool() {
 		RegisterEventForWebhook(&TaskCreatedEvent{})
 		RegisterEventForWebhook(&TaskUpdatedEvent{})
@@ -93,6 +87,12 @@ func RegisterListeners() {
 		RegisterEventForWebhook(&ProjectDeletedEvent{})
 		RegisterEventForWebhook(&ProjectSharedWithUserEvent{})
 		RegisterEventForWebhook(&ProjectSharedWithTeamEvent{})
+		RegisterUserDirectedEventForWebhook(&TaskReminderFiredEvent{})
+		RegisterUserDirectedEventForWebhook(&TaskOverdueEvent{})
+		RegisterUserDirectedEventForWebhook(&TasksOverdueEvent{})
+
+		// Internal delivery listener — one message per webhook with its own retry lifecycle
+		events.RegisterListener((&WebhookDeliveryEvent{}).Name(), &WebhookDeliveryListener{})
 	}
 }
 
@@ -160,7 +160,7 @@ func notifyMentionedUsers(sess *xorm.Session, task *Task, text string, n notific
 			continue
 		}
 
-		err = notifications.Notify(u, n)
+		err = notifications.Notify(u, n, sess)
 		if err != nil {
 			return users, err
 		}
@@ -192,11 +192,17 @@ func (s *SendTaskCommentNotification) Handle(msg *message.Message) (err error) {
 	sess := db.NewSession()
 	defer sess.Close()
 
+	project, err := GetProjectSimpleByID(sess, event.Task.ProjectID)
+	if err != nil {
+		return err
+	}
+
 	n := &TaskCommentNotification{
 		Doer:      event.Doer,
 		Task:      event.Task,
 		Comment:   event.Comment,
 		Mentioned: true,
+		Project:   project,
 	}
 	mentionedUsers, err := notifyMentionedUsers(sess, event.Task, event.Comment.Comment, n)
 	if err != nil {
@@ -223,14 +229,15 @@ func (s *SendTaskCommentNotification) Handle(msg *message.Message) (err error) {
 			Doer:    event.Doer,
 			Task:    event.Task,
 			Comment: event.Comment,
+			Project: project,
 		}
-		err = notifications.Notify(subscriber.User, n)
+		err = notifications.Notify(subscriber.User, n, sess)
 		if err != nil {
 			return
 		}
 	}
 
-	return
+	return sess.Commit()
 }
 
 // HandleTaskCommentEditMentions  represents a listener
@@ -250,17 +257,30 @@ func (s *HandleTaskCommentEditMentions) Handle(msg *message.Message) (err error)
 		return err
 	}
 
+	if event.Task == nil || event.Comment == nil {
+		return nil
+	}
+
 	sess := db.NewSession()
 	defer sess.Close()
+
+	project, err := GetProjectSimpleByID(sess, event.Task.ProjectID)
+	if err != nil {
+		return err
+	}
 
 	n := &TaskCommentNotification{
 		Doer:      event.Doer,
 		Task:      event.Task,
 		Comment:   event.Comment,
 		Mentioned: true,
+		Project:   project,
 	}
 	_, err = notifyMentionedUsers(sess, event.Task, event.Comment.Comment, n)
-	return err
+	if err != nil {
+		return err
+	}
+	return sess.Commit()
 }
 
 // SendTaskAssignedNotification  represents a listener
@@ -295,6 +315,11 @@ func (s *SendTaskAssignedNotification) Handle(msg *message.Message) (err error) 
 		return err
 	}
 
+	project, err := GetProjectSimpleByID(sess, task.ProjectID)
+	if err != nil {
+		return err
+	}
+
 	notifiedUsers := make(map[int64]bool)
 
 	for _, subscriber := range subscribers {
@@ -312,8 +337,9 @@ func (s *SendTaskAssignedNotification) Handle(msg *message.Message) (err error) 
 			Task:     &task,
 			Assignee: event.Assignee,
 			Target:   subscriber.User,
+			Project:  project,
 		}
-		err = notifications.Notify(subscriber.User, n)
+		err = notifications.Notify(subscriber.User, n, sess)
 		if err != nil {
 			return
 		}
@@ -321,7 +347,7 @@ func (s *SendTaskAssignedNotification) Handle(msg *message.Message) (err error) 
 		notifiedUsers[subscriber.UserID] = true
 	}
 
-	return nil
+	return sess.Commit()
 }
 
 // SendTaskDeletedNotification  represents a listener
@@ -366,13 +392,13 @@ func (s *SendTaskDeletedNotification) Handle(msg *message.Message) (err error) {
 			Doer: event.Doer,
 			Task: event.Task,
 		}
-		err = notifications.Notify(subscriber.User, n)
+		err = notifications.Notify(subscriber.User, n, sess)
 		if err != nil {
 			return
 		}
 	}
 
-	return nil
+	return sess.Commit()
 }
 
 // HandleTaskCreateMentions  represents a listener
@@ -392,16 +418,29 @@ func (s *HandleTaskCreateMentions) Handle(msg *message.Message) (err error) {
 		return err
 	}
 
+	if event.Task == nil {
+		return nil
+	}
+
 	sess := db.NewSession()
 	defer sess.Close()
 
+	project, err := GetProjectSimpleByID(sess, event.Task.ProjectID)
+	if err != nil {
+		return err
+	}
+
 	n := &UserMentionedInTaskNotification{
-		Task:  event.Task,
-		Doer:  event.Doer,
-		IsNew: true,
+		Task:    event.Task,
+		Doer:    event.Doer,
+		IsNew:   true,
+		Project: project,
 	}
 	_, err = notifyMentionedUsers(sess, event.Task, event.Task.Description, n)
-	return err
+	if err != nil {
+		return err
+	}
+	return sess.Commit()
 }
 
 // HandleTaskUpdatedMentions  represents a listener
@@ -421,17 +460,30 @@ func (s *HandleTaskUpdatedMentions) Handle(msg *message.Message) (err error) {
 		return err
 	}
 
+	if event.Task == nil {
+		return nil
+	}
+
 	sess := db.NewSession()
 	defer sess.Close()
 
+	project, err := GetProjectSimpleByID(sess, event.Task.ProjectID)
+	if err != nil {
+		return err
+	}
+
 	n := &UserMentionedInTaskNotification{
-		Task:  event.Task,
-		Doer:  event.Doer,
-		IsNew: false,
+		Task:    event.Task,
+		Doer:    event.Doer,
+		IsNew:   false,
+		Project: project,
 	}
 
 	_, err = notifyMentionedUsers(sess, event.Task, event.Task.Description, n)
-	return err
+	if err != nil {
+		return err
+	}
+	return sess.Commit()
 }
 
 // HandleTaskUpdateLastUpdated  represents a listener
@@ -484,122 +536,12 @@ func (s *HandleTaskUpdateLastUpdated) Handle(msg *message.Message) (err error) {
 	sess := db.NewSession()
 	defer sess.Close()
 
-	return updateTaskLastUpdated(sess, &Task{ID: taskIDInt})
-}
-
-// RemoveTaskFromTypesense represents a listener
-type RemoveTaskFromTypesense struct {
-}
-
-// Name defines the name for the RemoveTaskFromTypesense listener
-func (s *RemoveTaskFromTypesense) Name() string {
-	return "typesense.task.remove"
-}
-
-// Handle is executed when the event RemoveTaskFromTypesense listens on is fired
-func (s *RemoveTaskFromTypesense) Handle(msg *message.Message) (err error) {
-	event := &TaskDeletedEvent{}
-	err = json.Unmarshal(msg.Payload, event)
+	err = updateTaskLastUpdated(sess, &Task{ID: taskIDInt})
 	if err != nil {
 		return err
 	}
 
-	log.Debugf("[Typesense Sync] Removing task %d from Typesense", event.Task.ID)
-
-	_, err = typesenseClient.
-		Collection("tasks").
-		Document(strconv.FormatInt(event.Task.ID, 10)).
-		Delete(context.Background())
-	return err
-}
-
-// AddTaskToTypesense  represents a listener
-type AddTaskToTypesense struct {
-}
-
-// Name defines the name for the AddTaskToTypesense listener
-func (l *AddTaskToTypesense) Name() string {
-	return "typesense.task.add"
-}
-
-// Handle is executed when the event AddTaskToTypesense listens on is fired
-func (l *AddTaskToTypesense) Handle(msg *message.Message) (err error) {
-	event := &TaskCreatedEvent{}
-	err = json.Unmarshal(msg.Payload, event)
-	if err != nil {
-		return err
-	}
-
-	log.Debugf("New task %d created, adding to typesense…", event.Task.ID)
-
-	s := db.NewSession()
-	defer s.Close()
-
-	task := make(map[int64]*Task, 1)
-	task[event.Task.ID] = event.Task // Will be filled with all data by the Typesense connector
-
-	return reindexTasksInTypesense(s, task)
-}
-
-// UpdateTaskInTypesense  represents a listener
-type UpdateTaskInTypesense struct {
-}
-
-// Name defines the name for the UpdateTaskInTypesense listener
-func (l *UpdateTaskInTypesense) Name() string {
-	return "typesense.task.update"
-}
-
-// Handle is executed when the event UpdateTaskInTypesense listens on is fired
-func (l *UpdateTaskInTypesense) Handle(msg *message.Message) (err error) {
-	event := &TaskUpdatedEvent{}
-	err = json.Unmarshal(msg.Payload, event)
-	if err != nil {
-		return err
-	}
-
-	s := db.NewSession()
-	defer s.Close()
-
-	task := make(map[int64]*Task, 1)
-	task[event.Task.ID] = event.Task // Will be filled with all data by the Typesense connector
-
-	return reindexTasksInTypesense(s, task)
-}
-
-// UpdateTaskPositionsInTypesense  represents a listener
-type UpdateTaskPositionsInTypesense struct {
-}
-
-// Name defines the name for the UpdateTaskPositionsInTypesense listener
-func (l *UpdateTaskPositionsInTypesense) Name() string {
-	return "typesense.task.position.update"
-}
-
-// Handle is executed when the event UpdateTaskPositionsInTypesense listens on is fired
-func (l *UpdateTaskPositionsInTypesense) Handle(msg *message.Message) (err error) {
-	event := &TaskPositionsRecalculatedEvent{}
-	err = json.Unmarshal(msg.Payload, event)
-	if err != nil {
-		return err
-	}
-
-	taskIDs := []int64{}
-	for _, position := range event.NewTaskPositions {
-		taskIDs = append(taskIDs, position.TaskID)
-	}
-
-	s := db.NewSession()
-	defer s.Close()
-
-	tasks, err := GetTasksSimpleByIDs(s, taskIDs)
-
-	taskMap := make(map[int64]*Task, 1)
-	for _, task := range tasks {
-		taskMap[task.ID] = task
-	}
-
-	return reindexTasksInTypesense(s, taskMap)
+	return sess.Commit()
 }
 
 // IncreaseAttachmentCounter  represents a listener
@@ -647,6 +589,10 @@ func (l *UpdateTaskInSavedFilterViews) Handle(msg *message.Message) (err error) 
 		return err
 	}
 
+	if event.Task == nil {
+		return nil
+	}
+
 	// This operation is potentially very resource-heavy, because we don't know if a task is included
 	// in a filter until we evaluate that filter. We need to evaluate each filter individually - since
 	// there can be many filters, this can take a while to execute.
@@ -676,15 +622,15 @@ func (l *UpdateTaskInSavedFilterViews) Handle(msg *message.Message) (err error) 
 
 	var fallbackTimezone string
 	if event.Doer != nil {
-		var u *user.User
-		u, err = user.GetUserByID(s, event.Doer.GetID())
-		if err == nil {
+		u, userErr := user.GetUserByID(s, event.Doer.GetID())
+		if userErr == nil {
 			fallbackTimezone = u.Timezone
-			// When a link share triggered this event, the user id will be 0, and thus this fails.
-			// Only passing the value along when the user was retrieved successfully ensures the whole handler
-			// does not fail because of that.
-			// When the fallback is empty, it will be handled later anyhow.
 		}
+		// When a link share triggered this event, the user id will be 0, and thus this fails.
+		// Similarly, when the doer has been deleted, the user will not exist.
+		// Only passing the value along when the user was retrieved successfully ensures the whole handler
+		// does not fail because of that.
+		// When the fallback is empty, it will be handled later anyhow.
 	}
 
 	taskBuckets := []*TaskBucket{}
@@ -745,14 +691,9 @@ func (l *UpdateTaskInSavedFilterViews) Handle(msg *message.Message) (err error) 
 		if err != nil {
 			return
 		}
-
-		task := make(map[int64]*Task, 1)
-		task[event.Task.ID] = event.Task // Will be filled with all data by the Typesense connector
-
-		return reindexTasksInTypesense(s, task)
 	}
 
-	return nil
+	return s.Commit()
 }
 
 ///////
@@ -816,13 +757,13 @@ func (s *SendProjectCreatedNotification) Handle(msg *message.Message) (err error
 			Doer:    event.Doer,
 			Project: event.Project,
 		}
-		err = notifications.Notify(subscriber.User, n)
+		err = notifications.Notify(subscriber.User, n, sess)
 		if err != nil {
 			return
 		}
 	}
 
-	return nil
+	return sess.Commit()
 }
 
 // WebhookListener represents a listener
@@ -839,6 +780,57 @@ type WebhookPayload struct {
 	EventName string      `json:"event_name"`
 	Time      time.Time   `json:"time"`
 	Data      interface{} `json:"data"`
+}
+
+// WebhookDeliveryListener delivers one webhook per message. It is the
+// consumer for WebhookDeliveryEvent and owns the retry semantics: any
+// error returned from Handle triggers the watermill retry middleware
+// independently for this single delivery, with no effect on other
+// webhooks on the same parent event.
+type WebhookDeliveryListener struct{}
+
+// Name defines the name for the WebhookDeliveryListener listener
+func (wdl *WebhookDeliveryListener) Name() string {
+	return "webhook.delivery.listener"
+}
+
+// Handle is executed when a WebhookDeliveryEvent is fired. It reloads the
+// webhook from the database by id (so secrets, target_url, and basic auth
+// credentials are always current) and performs the HTTP delivery.
+//
+// Special cases:
+//   - If the webhook row no longer exists (deleted between fan-out and
+//     delivery), Handle returns nil so the message is not retried.
+//   - A nil payload is treated as data corruption / version skew and
+//     returned as an error so the message is retried and eventually
+//     parked in the poison queue rather than silently dropped.
+//   - Any other error is returned so the watermill retry middleware
+//     retries this delivery with exponential backoff, and eventually
+//     parks it in the poison queue if all retries fail.
+func (wdl *WebhookDeliveryListener) Handle(msg *message.Message) error {
+	evt := &WebhookDeliveryEvent{}
+	if err := json.Unmarshal(msg.Payload, evt); err != nil {
+		return err
+	}
+
+	if evt.Payload == nil {
+		return fmt.Errorf("webhook delivery event for webhook %d has no payload", evt.WebhookID)
+	}
+
+	s := db.NewSession()
+	defer s.Close()
+
+	webhook := &Webhook{}
+	has, err := s.Where("id = ?", evt.WebhookID).Get(webhook)
+	if err != nil {
+		return err
+	}
+	if !has {
+		log.Debugf("webhook %d no longer exists, skipping delivery of %s", evt.WebhookID, evt.Payload.EventName)
+		return nil
+	}
+
+	return webhook.sendWebhookPayload(evt.Payload)
 }
 
 func getIDAsInt64(id interface{}) int64 {
@@ -890,6 +882,20 @@ func getProjectIDFromAnyEvent(eventPayload map[string]interface{}) int64 {
 		t := project.(map[string]interface{})
 		if projectID, has := t["id"]; has {
 			return getIDAsInt64(projectID)
+		}
+	}
+
+	return 0
+}
+
+func getUserIDFromAnyEvent(eventPayload map[string]interface{}) int64 {
+	if u, has := eventPayload["user"]; has {
+		userMap, ok := u.(map[string]interface{})
+		if !ok {
+			return 0
+		}
+		if userID, has := userMap["id"]; has {
+			return getIDAsInt64(userID)
 		}
 	}
 
@@ -1021,6 +1027,33 @@ func reloadAssigneeInEvent(s *xorm.Session, event map[string]interface{}) error 
 	return nil
 }
 
+func reloadUserInEvent(s *xorm.Session, event map[string]interface{}) error {
+	u, has := event["user"]
+	if !has || u == nil {
+		return nil
+	}
+
+	userMap, ok := u.(map[string]interface{})
+	if !ok {
+		return nil
+	}
+
+	userID := getIDAsInt64(userMap["id"])
+	if userID <= 0 {
+		return nil
+	}
+
+	fullUser, err := user.GetUserByID(s, userID)
+	if err != nil && !user.IsErrUserDoesNotExist(err) {
+		return err
+	}
+	if err == nil {
+		event["user"] = fullUser
+	}
+
+	return nil
+}
+
 func reloadEventData(s *xorm.Session, event map[string]interface{}, projectID int64) (eventWithData map[string]interface{}, doerID int64, err error) {
 	// Load event data again so that it is always populated in the webhook payload
 
@@ -1044,6 +1077,11 @@ func reloadEventData(s *xorm.Session, event map[string]interface{}, projectID in
 		return nil, doerID, err
 	}
 
+	err = reloadUserInEvent(s, event)
+	if err != nil {
+		return nil, doerID, err
+	}
+
 	return event, doerID, nil
 }
 
@@ -1055,46 +1093,75 @@ func (wl *WebhookListener) Handle(msg *message.Message) (err error) {
 		return err
 	}
 
+	s := db.NewSession()
+	defer s.Close()
+
 	projectID := getProjectIDFromAnyEvent(event)
-	if projectID == 0 {
+	isUserDirected := IsUserDirectedEvent(wl.EventName)
+
+	// For non-user-directed events, we need a project ID
+	if projectID == 0 && !isUserDirected {
 		log.Debugf("event %s does not contain a project id, not handling webhook", wl.EventName)
 		return nil
 	}
 
-	s := db.NewSession()
-	defer s.Close()
-
-	parents, err := GetAllParentProjects(s, projectID)
-	if err != nil {
-		return err
-	}
-
-	projectIDs := make([]int64, 0, len(parents)+1)
-	projectIDs = append(projectIDs, projectID)
-
-	for _, p := range parents {
-		projectIDs = append(projectIDs, p.ID)
-	}
-
-	ws := []*Webhook{}
-	err = s.In("project_id", projectIDs).
-		Find(&ws)
-	if err != nil {
-		return err
-	}
-
+	// Look up project-level webhooks
 	matchingWebhooks := []*Webhook{}
-	for _, w := range ws {
-		for _, e := range w.Events {
-			if e == wl.EventName {
-				matchingWebhooks = append(matchingWebhooks, w)
-				break
+	if projectID > 0 {
+		parents, err := GetAllParentProjects(s, projectID)
+		if err != nil {
+			return err
+		}
+
+		projectIDs := make([]int64, 0, len(parents)+1)
+		projectIDs = append(projectIDs, projectID)
+		for _, p := range parents {
+			projectIDs = append(projectIDs, p.ID)
+		}
+
+		ws := []*Webhook{}
+		err = s.In("project_id", projectIDs).
+			OrderBy("id ASC").
+			Find(&ws)
+		if err != nil {
+			return err
+		}
+
+		for _, w := range ws {
+			for _, e := range w.Events {
+				if e == wl.EventName {
+					matchingWebhooks = append(matchingWebhooks, w)
+					break
+				}
+			}
+		}
+	}
+
+	// Look up user-level webhooks for user-directed events
+	if isUserDirected {
+		userID := getUserIDFromAnyEvent(event)
+		if userID > 0 {
+			userWebhooks := []*Webhook{}
+			err = s.Where("user_id = ? AND (project_id IS NULL OR project_id = 0)", userID).
+				OrderBy("id ASC").
+				Find(&userWebhooks)
+			if err != nil {
+				return err
+			}
+
+			for _, w := range userWebhooks {
+				for _, e := range w.Events {
+					if e == wl.EventName {
+						matchingWebhooks = append(matchingWebhooks, w)
+						break
+					}
+				}
 			}
 		}
 	}
 
 	if len(matchingWebhooks) == 0 {
-		log.Debugf("Did not find any webhook for the %s event for project %d, not sending", wl.EventName, projectID)
+		log.Debugf("Did not find any webhook for the %s event, not sending", wl.EventName)
 		return nil
 	}
 
@@ -1104,9 +1171,17 @@ func (wl *WebhookListener) Handle(msg *message.Message) (err error) {
 		return err
 	}
 
+	now := time.Now()
 	for _, webhook := range matchingWebhooks {
+		// Clone the event map so each webhook gets its own, isolated payload.
+		// Otherwise adding event["project"] for one webhook would leak into
+		// payloads dispatched for later webhooks.
+		perWebhookEvent := make(map[string]interface{}, len(event)+1)
+		for k, v := range event {
+			perWebhookEvent[k] = v
+		}
 
-		if _, has := event["project"]; !has {
+		if _, has := perWebhookEvent["project"]; !has && webhook.ProjectID > 0 {
 			project, err := GetProjectSimpleByID(s, webhook.ProjectID)
 			if err != nil && !IsErrProjectDoesNotExist(err) {
 				log.Errorf("Could not load project for webhook %d: %s", webhook.ID, err)
@@ -1117,22 +1192,29 @@ func (wl *WebhookListener) Handle(msg *message.Message) (err error) {
 					log.Errorf("Could not load project for webhook %d: %s", webhook.ID, err)
 				}
 				if err == nil {
-					event["project"] = project
+					perWebhookEvent["project"] = project
 				}
 			}
 		}
 
-		err = webhook.sendWebhookPayload(&WebhookPayload{
-			EventName: wl.EventName,
-			Time:      time.Now(),
-			Data:      event,
+		dispatchErr := events.Dispatch(&WebhookDeliveryEvent{
+			WebhookID: webhook.ID,
+			Payload: &WebhookPayload{
+				EventName: wl.EventName,
+				Time:      now,
+				Data:      perWebhookEvent,
+			},
 		})
-		if err != nil {
-			return err
+		if dispatchErr != nil {
+			// A dispatch failure here means the in-process event bus is broken —
+			// there is nothing useful to retry per-webhook and we do not want
+			// to fail the parent message (which would re-fan-out and duplicate
+			// any deliveries that did succeed). Log and move on.
+			log.Errorf("Could not dispatch webhook.delivery for webhook %d: %s", webhook.ID, dispatchErr)
 		}
 	}
 
-	return
+	return nil
 }
 
 ///////
@@ -1187,11 +1269,6 @@ func (l *CleanupTaskAssignmentsAfterTeamRemoval) Handle(msg *message.Message) (e
 
 	if event == nil || event.Team == nil || event.Member == nil {
 		return nil
-	}
-
-	err = s.Begin()
-	if err != nil {
-		return err
 	}
 
 	err = cleanupTaskMembersAfterTeamRemoval(s, event.Team.ID, event.Member.ID)
@@ -1253,10 +1330,6 @@ func (s *HandleUserDataExport) Handle(msg *message.Message) (err error) {
 
 	sess := db.NewSession()
 	defer sess.Close()
-	err = sess.Begin()
-	if err != nil {
-		return
-	}
 
 	err = ExportUserData(sess, event.User)
 	if err != nil {
@@ -1266,8 +1339,7 @@ func (s *HandleUserDataExport) Handle(msg *message.Message) (err error) {
 
 	log.Debugf("Done exporting user data for user %d...", event.User.ID)
 
-	err = sess.Commit()
-	return err
+	return sess.Commit()
 }
 
 type MarkTaskUnreadOnComment struct {
@@ -1286,11 +1358,6 @@ func (s *MarkTaskUnreadOnComment) Handle(msg *message.Message) (err error) {
 
 	sess := db.NewSession()
 	defer sess.Close()
-
-	err = sess.Begin()
-	if err != nil {
-		return err
-	}
 
 	project, err := GetProjectSimpleByID(sess, event.Task.ProjectID)
 	if err != nil {

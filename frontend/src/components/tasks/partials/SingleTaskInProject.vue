@@ -8,15 +8,21 @@
 			:class="{'is-loading': taskService.loading}"
 			class="task loader-container single-task"
 			tabindex="-1"
+			:data-is-overdue="isOverdue || undefined"
 			@click="openTaskDetail"
 			@keyup.enter="openTaskDetail"
 		>
-			<FancyCheckbox
-				v-model="task.done"
-				:disabled="(isArchived || disabled) && !canMarkAsDone"
-				@update:modelValue="markAsDone"
-				@click.stop
-			/>
+			<span
+				v-tooltip="!canMarkAsDone ? $t('task.readOnlyCheckbox') : ''"
+				class="is-inline-flex is-align-items-center"
+			>
+				<FancyCheckbox
+					v-model="task.done"
+					:disabled="isArchived || disabled || !canMarkAsDone"
+					@update:modelValue="markAsDone"
+					@click.stop
+				/>
+			</span>
 
 			<ColorBubble
 				v-if="!showProjectSeparately && projectColor !== '' && currentProject?.id !== task.projectId"
@@ -89,7 +95,6 @@
 						>	
 							<time
 								:datetime="formatISO(task.dueDate)"
-								:class="{'overdue': task.dueDate <= new Date() && !task.done}"
 								class="is-italic"
 								:aria-expanded="isOpen ? 'true' : 'false'"
 							>
@@ -223,6 +228,7 @@ import {useIntervalFn} from '@vueuse/core'
 import {playPopSound} from '@/helpers/playPop'
 import {isEditorContentEmpty} from '@/helpers/editorContentEmpty'
 import {TASK_REPEAT_MODES} from '@/types/IRepeatMode'
+import {useGlobalNow} from '@/composables/useGlobalNow'
 
 const props = withDefaults(defineProps<{
 	theTask: ITask,
@@ -307,6 +313,14 @@ useIntervalFn(updateDueDate, 60_000, {
 onMounted(updateDueDate)
 
 watch(() => task.value.dueDate, updateDueDate)
+
+const {now} = useGlobalNow()
+const isOverdue = computed(() => (
+	!task.value.done &&
+	task.value.dueDate !== null &&
+	task.value.dueDate.getTime() > 0 &&
+	task.value.dueDate.getTime() <= now.value.getTime()
+))
 
 let oldTask
 
@@ -429,23 +443,24 @@ defineExpose({
 
 		flex: 1 0 50%;
 
-		.dueDate {
-			display: inline-block;
-			margin-inline-start: 5px;
+	}
 
-			&:focus-visible {
-				box-shadow: none;
+	.dueDate {
+		display: inline-block;
+		margin-inline-start: 5px;
 
-				time {
-					box-shadow: 0 0 0 1px hsla(var(--primary-hsl), 0.5);
-					border-radius: 3px;
-				}
+		&:focus-visible {
+			box-shadow: none;
+
+			time {
+				box-shadow: 0 0 0 1px hsla(var(--primary-hsl), 0.5);
+				border-radius: 3px;
 			}
 		}
+	}
 
-		.overdue {
-			color: var(--danger);
-		}
+	&[data-is-overdue] .dueDate {
+		color: var(--danger);
 	}
 
 	.task-project {

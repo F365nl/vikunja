@@ -54,29 +54,34 @@ package routes
 import (
 	"context"
 	"log/slog"
+	"net"
 	"strings"
 	"time"
 
 	"code.vikunja.io/api/pkg/config"
 	"code.vikunja.io/api/pkg/log"
 	"code.vikunja.io/api/pkg/models"
+	"code.vikunja.io/api/pkg/modules/auth/oauth2server"
 	"code.vikunja.io/api/pkg/modules/auth/openid"
 	"code.vikunja.io/api/pkg/modules/background"
 	backgroundHandler "code.vikunja.io/api/pkg/modules/background/handler"
 	"code.vikunja.io/api/pkg/modules/background/unsplash"
 	"code.vikunja.io/api/pkg/modules/background/upload"
 	"code.vikunja.io/api/pkg/modules/migration"
+	csvmigrator "code.vikunja.io/api/pkg/modules/migration/csv"
 	migrationHandler "code.vikunja.io/api/pkg/modules/migration/handler"
 	microsofttodo "code.vikunja.io/api/pkg/modules/migration/microsoft-todo"
 	"code.vikunja.io/api/pkg/modules/migration/ticktick"
 	"code.vikunja.io/api/pkg/modules/migration/todoist"
 	"code.vikunja.io/api/pkg/modules/migration/trello"
 	vikunja_file "code.vikunja.io/api/pkg/modules/migration/vikunja-file"
+	"code.vikunja.io/api/pkg/modules/migration/wekan"
 	"code.vikunja.io/api/pkg/plugins"
 	apiv1 "code.vikunja.io/api/pkg/routes/api/v1"
 	"code.vikunja.io/api/pkg/routes/caldav"
 	"code.vikunja.io/api/pkg/version"
 	"code.vikunja.io/api/pkg/web/handler"
+	ws "code.vikunja.io/api/pkg/websocket"
 
 	"github.com/getsentry/sentry-go"
 	"github.com/labstack/echo/v5"
@@ -125,6 +130,24 @@ func NewEcho() *echo.Echo {
 		}),
 	})
 
+	// Configure IP extraction to prevent rate limit bypass via spoofed headers.
+	// Echo's default RealIP() trusts X-Forwarded-For and X-Real-IP unconditionally,
+	// which allows attackers to bypass IP-based rate limits.
+	// See: https://echo.labstack.com/docs/ip-address
+	switch config.ServiceIPExtractionMethod.GetString() {
+	case "xff":
+		trustOptions := parseTrustedProxies(config.ServiceTrustedProxies.GetString())
+		e.IPExtractor = echo.ExtractIPFromXFFHeader(trustOptions...)
+		log.Debugf("IP extraction: X-Forwarded-For with %d trusted proxy ranges", len(trustOptions))
+	case "realip":
+		trustOptions := parseTrustedProxies(config.ServiceTrustedProxies.GetString())
+		e.IPExtractor = echo.ExtractIPFromRealIPHeader(trustOptions...)
+		log.Debugf("IP extraction: X-Real-IP with %d trusted proxy ranges", len(trustOptions))
+	default:
+		e.IPExtractor = echo.ExtractIPDirect()
+		log.Debugf("IP extraction: direct (TCP remote address)")
+	}
+
 	e.Logger = log.NewEchoLogger(config.LogEnabled.GetBool(), config.LogHTTP.GetString(), config.LogFormat.GetString())
 
 	// Logger
@@ -135,10 +158,12 @@ func NewEcho() *echo.Echo {
 			LogURI:      true,
 			LogMethod:   true,
 			LogLatency:  true,
+			LogRemoteIP: true,
 			HandleError: true,
 			LogValuesFunc: func(_ *echo.Context, v middleware.RequestLoggerValues) error {
 				if v.Error == nil {
 					httpLogger.LogAttrs(context.Background(), slog.LevelInfo, "",
+						slog.String("remote_ip", v.RemoteIP),
 						slog.String("method", v.Method),
 						slog.String("uri", v.URI),
 						slog.Int("status", v.Status),
@@ -146,6 +171,7 @@ func NewEcho() *echo.Echo {
 					)
 				} else {
 					httpLogger.LogAttrs(context.Background(), slog.LevelError, "",
+						slog.String("remote_ip", v.RemoteIP),
 						slog.String("method", v.Method),
 						slog.String("uri", v.URI),
 						slog.Int("status", v.Status),
@@ -176,6 +202,27 @@ func NewEcho() *echo.Echo {
 	e.HTTPErrorHandler = CreateHTTPErrorHandler(e, config.SentryEnabled.GetBool())
 
 	return e
+}
+
+func parseTrustedProxies(proxies string) []echo.TrustOption {
+	if proxies == "" {
+		return nil
+	}
+
+	var options []echo.TrustOption
+	for _, cidr := range strings.Split(proxies, ",") {
+		cidr = strings.TrimSpace(cidr)
+		if cidr == "" {
+			continue
+		}
+		_, ipNet, err := net.ParseCIDR(cidr)
+		if err != nil {
+			log.Warningf("Invalid trusted proxy CIDR %q: %v", cidr, err)
+			continue
+		}
+		options = append(options, echo.TrustIPRange(ipNet))
+	}
+	return options
 }
 
 func setupSentry(e *echo.Echo) {
@@ -227,7 +274,8 @@ func RegisterRoutes(e *echo.Echo) {
 			UnsafeAllowOriginFunc: func(_ *echo.Context, origin string) (string, bool, error) {
 				return matchCORSOrigin(origin, allowedOrigins)
 			},
-			MaxAge: config.CorsMaxAge.GetInt(),
+			AllowCredentials: true,
+			MaxAge:           config.CorsMaxAge.GetInt(),
 			Skipper: func(context *echo.Context) bool {
 				// Since it is not possible to register this middleware just for the api group,
 				// we just disable it when for caldav requests.
@@ -254,13 +302,16 @@ var unauthenticatedAPIPaths = map[string]bool{
 	"/api/v1/user/password/reset":            true,
 	"/api/v1/user/confirm":                   true,
 	"/api/v1/login":                          true,
+	"/api/v1/user/token/refresh":             true,
 	"/api/v1/auth/openid/:provider/callback": true,
 	"/api/v1/test/:table":                    true,
 	"/api/v1/info":                           true,
 	"/api/v1/shares/:share/auth":             true,
 	"/api/v1/docs.json":                      true,
 	"/api/v1/docs":                           true,
+	"/api/v1/docs/redoc.standalone.js":       true,
 	"/api/v1/metrics":                        true,
+	"/api/v1/oauth/token":                    true,
 }
 
 // collectRoutesForAPITokens collects all routes for API token permission checking.
@@ -283,6 +334,17 @@ func collectRoutesForAPITokens(e *echo.Echo) {
 
 func registerAPIRoutes(a *echo.Group) {
 
+	// Prevent browsers from caching API responses. Without an explicit
+	// Cache-Control header browsers may heuristically cache JSON responses
+	// which causes stale data (e.g. newly team-shared projects not appearing
+	// until a hard refresh).
+	a.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c *echo.Context) error {
+			c.Response().Header().Set("Cache-Control", "no-store")
+			return next(c)
+		}
+	})
+
 	// This is the group with no auth
 	// It is its own group to be able to rate limit this based on different heuristics
 	n := a.Group("")
@@ -291,6 +353,10 @@ func registerAPIRoutes(a *echo.Group) {
 	// Docs
 	n.GET("/docs.json", apiv1.DocsJSON)
 	n.GET("/docs", apiv1.RedocUI)
+	n.GET("/docs/redoc.standalone.js", apiv1.RedocJS)
+
+	// WebSocket (auth happens after upgrade via first message)
+	n.GET("/ws", ws.UpgradeHandler)
 
 	// Prometheus endpoint
 	setupMetrics(n)
@@ -315,12 +381,21 @@ func registerAPIRoutes(a *echo.Group) {
 		ur.POST("/login", apiv1.Login)
 	}
 
+	// Refresh token endpoint — unauthenticated because it uses the refresh
+	// token cookie instead of a JWT bearer token.
+	ur.POST("/user/token/refresh", apiv1.RefreshToken)
+
 	if config.AuthOpenIDEnabled.GetBool() {
 		ur.POST("/auth/openid/:provider/callback", openid.HandleCallback)
 	}
 
+	// OAuth 2.0 token endpoint — unauthenticated because it validates
+	// credentials (authorization code or refresh token) itself.
+	ur.POST("/oauth/token", oauth2server.HandleToken)
+
 	// Testing
 	if config.ServiceTestingtoken.GetString() != "" {
+		n.DELETE("/test/all", apiv1.HandleTestingTruncateAll)
 		n.PATCH("/test/:table", apiv1.HandleTesting)
 	}
 
@@ -345,6 +420,9 @@ func registerAPIRoutes(a *echo.Group) {
 	a.POST("/token/test", apiv1.CheckToken)
 	a.GET("/routes", models.GetAvailableAPIRoutesForToken)
 
+	// OAuth 2.0 authorize endpoint — requires authentication.
+	a.POST("/oauth/authorize", oauth2server.HandleAuthorize)
+
 	// Avatar endpoint
 	a.GET("/avatar/:username", apiv1.GetAvatar)
 
@@ -355,6 +433,7 @@ func registerAPIRoutes(a *echo.Group) {
 	u.POST("/password", apiv1.UserChangePassword)
 	u.GET("s", apiv1.UserList)
 	u.POST("/token", apiv1.RenewToken)
+	u.POST("/logout", apiv1.Logout)
 	u.POST("/settings/email", apiv1.UpdateUserEmail)
 	u.GET("/settings/avatar", apiv1.GetUserAvatarProvider)
 	u.POST("/settings/avatar", apiv1.ChangeUserAvatarProvider)
@@ -367,6 +446,23 @@ func registerAPIRoutes(a *echo.Group) {
 	u.PUT("/settings/token/caldav", apiv1.GenerateCaldavToken)
 	u.GET("/settings/token/caldav", apiv1.GetCaldavTokens)
 	u.DELETE("/settings/token/caldav/:id", apiv1.DeleteCaldavToken)
+
+	sessionProvider := &handler.WebHandler{
+		EmptyStruct: func() handler.CObject {
+			return &models.Session{}
+		},
+	}
+	u.GET("/sessions", sessionProvider.ReadAllWeb)
+	u.DELETE("/sessions/:session", sessionProvider.DeleteWeb)
+
+	// User-level webhooks
+	if config.WebhooksEnabled.GetBool() {
+		u.GET("/settings/webhooks", apiv1.GetUserWebhooks)
+		u.GET("/settings/webhooks/events", apiv1.GetUserDirectedWebhookEvents)
+		u.PUT("/settings/webhooks", apiv1.CreateUserWebhook)
+		u.POST("/settings/webhooks/:webhook", apiv1.UpdateUserWebhook)
+		u.DELETE("/settings/webhooks/:webhook", apiv1.DeleteUserWebhook)
+	}
 
 	if config.ServiceEnableTotp.GetBool() {
 		u.GET("/settings/totp", apiv1.UserTOTP)
@@ -442,6 +538,13 @@ func registerAPIRoutes(a *echo.Group) {
 	a.GET("/tasks", taskCollectionHandler.ReadAllWeb)
 	a.DELETE("/tasks/:projecttask", taskHandler.DeleteWeb)
 	a.POST("/tasks/:projecttask", taskHandler.UpdateWeb)
+
+	taskDuplicateHandler := &handler.WebHandler{
+		EmptyStruct: func() handler.CObject {
+			return &models.TaskDuplicate{}
+		},
+	}
+	a.PUT("/tasks/:projecttask/duplicate", taskDuplicateHandler.CreateWeb)
 
 	taskUnreadStatusHandler := &handler.WebHandler{
 		EmptyStruct: func() handler.CObject {
@@ -751,6 +854,18 @@ func registerMigrations(m *echo.Group) {
 		},
 	}
 	tickTickFileMigrator.RegisterRoutes(m)
+
+	// WeKan File Migrator
+	wekanFileMigrator := migrationHandler.FileMigratorWeb{
+		MigrationStruct: func() migration.FileMigrator {
+			return &wekan.Migrator{}
+		},
+	}
+	wekanFileMigrator.RegisterRoutes(m)
+
+	// CSV File Migrator (always enabled - generic import)
+	csvFileMigrator := &csvmigrator.MigratorWeb{}
+	csvFileMigrator.RegisterRoutes(m)
 }
 
 func registerCalDavRoutes(c *echo.Group) {
@@ -761,6 +876,7 @@ func registerCalDavRoutes(c *echo.Group) {
 	// THIS is the entry point for caldav clients, otherwise projects will show up double
 	c.Any("", caldav.EntryHandler)
 	c.Any("/", caldav.EntryHandler)
+	c.Any("/principals/*", caldav.PrincipalHandler)
 	c.Any("/principals/*/", caldav.PrincipalHandler)
 	c.Any("/projects", caldav.ProjectHandler)
 	c.Any("/projects/", caldav.ProjectHandler)

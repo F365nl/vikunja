@@ -36,6 +36,10 @@ var (
 	testUpdatedTime time.Time
 )
 
+func init() {
+	db.RegisterTables(GetTables())
+}
+
 // GetTables returns all structs which are also a table.
 func GetTables() []interface{} {
 	return []interface{}{
@@ -59,13 +63,14 @@ func GetTables() []interface{} {
 		&Subscription{},
 		&Favorite{},
 		&APIToken{},
-		&TypesenseSync{},
 		&Webhook{},
 		&Reaction{},
 		&ProjectView{},
 		&TaskPosition{},
 		&TaskBucket{},
 		&TaskUnreadStatus{},
+		&Session{},
+		&OAuthCode{},
 	}
 }
 

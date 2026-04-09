@@ -4,9 +4,14 @@
             "key": "service",
             "children": [
                 {
+                    "key": "secret",
+                    "default_value": "\u003ca-secret\u003e",
+                    "comment": "This secret is used to sign JWT tokens and for other cryptographic operations.\nDefault is a random secret which will be generated at each startup of Vikunja.\n(This means all already issued tokens will be invalid once you restart Vikunja)"
+                },
+                {
                     "key": "JWTSecret",
                     "default_value": "\u003cjwt-secret\u003e",
-                    "comment": "This token is used to verify issued JWT tokens.\nDefault is a random token which will be generated at each startup of Vikunja.\n(This means all already issued tokens will be invalid once you restart Vikunja)"
+                    "comment": "Deprecated: use service.secret instead. If set, its value will be copied to service.secret."
                 },
                 {
                     "key": "jwtttl",
@@ -17,6 +22,11 @@
                     "key": "jwtttllong",
                     "default_value": "2592000",
                     "comment": "The duration of the \"remember me\" time in seconds. When the login request is made with\nthe long param set, the token returned will be valid for this period.\nThe default is 2592000 seconds (30 Days)."
+                },
+                {
+                    "key": "jwtttlshort",
+                    "default_value": "600",
+                    "comment": "The duration of short-lived JWT tokens in seconds. These tokens are used together with\nrefresh tokens for session-based authentication.\nThe default is 600 seconds (10 minutes)."
                 },
                 {
                     "key": "interface",
@@ -41,7 +51,7 @@
                 {
                     "key": "rootpath",
                     "default_value": "\u003crootpath\u003e",
-                    "comment": "The base path on the file system where the binary and assets are.\nVikunja will also look in this path for a config file, so you could provide only this variable to point to a folder\nwith a config file which will then be used."
+                    "comment": "The base path on the file system where Vikunja stores its data (database, files, logs, plugins).\nDefaults to the current working directory. When running as a systemd service, this respects the WorkingDirectory= setting.\nVikunja will also look in this path for a config file, so you could provide only this variable to point to a folder\nwith a config file which will then be used."
                 },
                 {
                     "key": "maxitemsperpage",
@@ -142,6 +152,16 @@
                     "key": "enableopenidteamusersearch",
                     "default_value": "false",
                     "comment": "If enabled, users will only find other users who are part of an existing team when they are searching for a user by their partial name. The other existing team may be created from openid. It is still possible to add users to teams with their exact email address even when this is enabled."
+                },
+                {
+                    "key": "ipextractionmethod",
+                    "default_value": "direct",
+                    "comment": "Method for extracting client IP addresses. 'direct' (default) uses the TCP remote address and ignores forwarding headers — use this when Vikunja faces the internet directly. 'xff' extracts from the X-Forwarded-For header — use this behind proxies like nginx, Traefik, or cloud load balancers. 'realip' extracts from the X-Real-IP header. When using 'xff' or 'realip', configure 'service.trustedproxies' with your proxy CIDR ranges."
+                },
+                {
+                    "key": "trustedproxies",
+                    "default_value": "",
+                    "comment": "Comma-separated list of CIDR ranges for trusted reverse proxies. Only used when service.ipextractionmethod is 'xff' or 'realip'. X-Forwarded-For / X-Real-IP headers are only trusted from these addresses. Example: '127.0.0.1/32,::1/128,10.0.0.0/8,172.16.0.0/12'"
                 }
             ]
         },
@@ -242,26 +262,11 @@
                     "key": "tls",
                     "default_value": "false",
                     "comment": "Enable SSL/TLS for mysql connections. Options: false, true, skip-verify, preferred"
-                }
-            ]
-        },
-        {
-            "key": "typesense",
-            "children": [
-                {
-                    "key": "enabled",
-                    "default_value": "false",
-                    "comment": "Whether to enable the Typesense integration. If true, all tasks will be synced to the configured Typesense\ninstance and all search and filtering will run through Typesense instead of only through the database.\nTypesense allows fast fulltext search including fuzzy matching support. It may return different results than\nwhat you'd get with a database-only search."
                 },
                 {
-                    "key": "url",
-                    "default_value": "",
-                    "comment": "The url to the Typesense instance you want to use. Can be hosted locally or in Typesense Cloud as long as Vikunja is able to reach it. Must be a http(s) url."
-                },
-                {
-                    "key": "apikey",
-                    "default_value": "",
-                    "comment": "The Typesense API key you want to use."
+                    "key": "schema",
+                    "default_value": "public",
+                    "comment": "The PostgreSQL schema to use. Only used with postgres. If you have an existing Vikunja installation where the tables were created in a non-public schema (e.g. via the database user's search_path), you must set this to match that schema name."
                 }
             ]
         },
@@ -953,7 +958,7 @@
                 {
                     "key": "language",
                     "default_value": "\u003cunset\u003e",
-                    "comment": "The language of the user interface. Must be an ISO 639-1 language code followed by an ISO 3166-1 alpha-2 country code. Check https://kolaente.dev/vikunja/vikunja/frontend/src/branch/main/src/i18n/lang for a list of possible languages. Will default to the browser language the user uses when signing up."
+                    "comment": "The language of the user interface. Must be an ISO 639-1 language code followed by an ISO 3166-1 alpha-2 country code. Check https://code.vikunja.io/vikunja/tree/main/frontend/src/i18n/lang for a list of possible languages. Will default to the browser language the user uses when signing up."
                 },
                 {
                     "key": "timezone",
@@ -978,12 +983,37 @@
                 {
                     "key": "proxyurl",
                     "default_value": "",
-                    "comment": "The URL of [a mole instance](https://github.com/frain-dev/mole) to use to proxy outgoing webhook requests. You should use this and configure appropriately if you're not the only one using your Vikunja instance. More info about why: https://webhooks.fyi/best-practices/webhook-providers#implement-security-on-egress-communication. Must be used in combination with `webhooks.password` (see below)."
+                    "comment": "Deprecated: use outgoingrequests.proxyurl instead. The URL of [a mole instance](https://github.com/frain-dev/mole) to use to proxy outgoing webhook requests. You should use this and configure appropriately if you're not the only one using your Vikunja instance. More info about why: https://webhooks.fyi/best-practices/webhook-providers#implement-security-on-egress-communication. Must be used in combination with `webhooks.password` (see below)."
                 },
                 {
                     "key": "proxypassword",
                     "default_value": "",
-                    "comment": "The proxy password to use when authenticating against the proxy."
+                    "comment": "Deprecated: use outgoingrequests.proxypassword instead. The proxy password to use when authenticating against the proxy."
+                },
+                {
+                    "key": "allownonroutableips",
+                    "default_value": "false",
+                    "comment": "Deprecated: use outgoingrequests.allownonroutableips instead. If set to true, webhook target URLs may resolve to non-globally-routable IP addresses (private networks, loopback, link-local, etc). When false (the default), Vikunja blocks outgoing webhook requests to these addresses to prevent SSRF attacks. Set this to true if you need webhooks to reach services on your internal network."
+                }
+            ]
+        },
+        {
+            "key": "outgoingrequests",
+            "children": [
+                {
+                    "key": "allownonroutableips",
+                    "default_value": "false",
+                    "comment": "If set to true, outgoing HTTP requests (webhooks, avatar downloads, migration imports) may resolve to non-globally-routable IP addresses. When false (the default), Vikunja blocks these to prevent SSRF attacks. Set to true only if you need these to reach services on your internal network."
+                },
+                {
+                    "key": "proxyurl",
+                    "default_value": "",
+                    "comment": "The URL of [a mole instance](https://github.com/frain-dev/mole) to use to proxy outgoing HTTP requests. Applies to webhooks, avatar downloads, and migration imports. You should use this and configure appropriately if you're not the only one using your Vikunja instance. More info about why: https://webhooks.fyi/best-practices/webhook-providers#implement-security-on-egress-communication. Must be used in combination with `outgoingrequests.proxypassword`."
+                },
+                {
+                    "key": "proxypassword",
+                    "default_value": "",
+                    "comment": "The proxy password for authenticating against the proxy."
                 }
             ]
         },
@@ -1019,6 +1049,11 @@
                     "key": "dir",
                     "default_value": "<rootpath>plugins",
                     "comment": "The directory where plugins are stored."
+                },
+                {
+                    "key": "loader",
+                    "default_value": "native",
+                    "comment": "The plugin loader to use. \"yaegi\" loads plugins from Go source files (directories of .go files). \"native\" (deprecated) loads compiled Go plugin shared libraries (.so files)."
                 }
             ]
         }

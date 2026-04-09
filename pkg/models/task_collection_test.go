@@ -89,14 +89,6 @@ func TestTaskCollection_ReadAll(t *testing.T) {
 		Created:     testCreatedTime,
 		Updated:     testUpdatedTime,
 	}
-	label5 := &Label{
-		ID:          5,
-		Title:       "Label #5",
-		CreatedByID: 2,
-		CreatedBy:   user2,
-		Created:     testCreatedTime,
-		Updated:     testUpdatedTime,
-	}
 
 	// We use individual variables for the tasks here to be able to rearrange or remove ones more easily
 	task1 := &Task{
@@ -602,50 +594,6 @@ func TestTaskCollection_ReadAll(t *testing.T) {
 		Created:      time.Unix(1543626724, 0).In(loc),
 		Updated:      time.Unix(1543626724, 0).In(loc),
 	}
-	task35 := &Task{
-		ID:          35,
-		Title:       "task #35",
-		Identifier:  "test21-1",
-		Index:       1,
-		CreatedByID: 1,
-		CreatedBy:   user1,
-		ProjectID:   21,
-		Assignees: []*user.User{
-			user2,
-		},
-		Labels: []*Label{
-			label4,
-			label5,
-		},
-		RelatedTasks: map[RelationKind][]*Task{
-			RelationKindRelated: {
-				{
-					ID:          1,
-					Title:       "task #1",
-					Description: "Lorem Ipsum",
-					Index:       1,
-					CreatedByID: 1,
-					ProjectID:   1,
-					IsFavorite:  true,
-					Created:     time.Unix(1543626724, 0).In(loc),
-					Updated:     time.Unix(1543626724, 0).In(loc),
-				},
-				{
-					ID:          1,
-					Title:       "task #1",
-					Description: "Lorem Ipsum",
-					Index:       1,
-					CreatedByID: 1,
-					ProjectID:   1,
-					IsFavorite:  true,
-					Created:     time.Unix(1543626724, 0).In(loc),
-					Updated:     time.Unix(1543626724, 0).In(loc),
-				},
-			},
-		},
-		Created: time.Unix(1543626724, 0).In(loc),
-		Updated: time.Unix(1543626724, 0).In(loc),
-	}
 	task39 := &Task{
 		ID:           39,
 		Title:        "task #39",
@@ -678,6 +626,19 @@ func TestTaskCollection_ReadAll(t *testing.T) {
 				Created:  time.Unix(1543626724, 0).In(loc),
 			},
 		},
+		ProjectID:    1,
+		RelatedTasks: map[RelationKind][]*Task{},
+		Created:      time.Unix(1543626724, 0).In(loc),
+		Updated:      time.Unix(1543626724, 0).In(loc),
+	}
+	task48 := &Task{
+		ID:           48,
+		Title:        "Landingpages update",
+		Description:  "Update all landingpages with new branding",
+		Identifier:   "test1-33",
+		Index:        33,
+		CreatedByID:  1,
+		CreatedBy:    user1,
 		ProjectID:    1,
 		RelatedTasks: map[RelationKind][]*Task{},
 		Created:      time.Unix(1543626724, 0).In(loc),
@@ -762,9 +723,9 @@ func TestTaskCollection_ReadAll(t *testing.T) {
 				task31,
 				task32,
 				task33,
-				task35,
 				task39,
 				task47,
+				task48,
 			},
 			wantErr: false,
 		},
@@ -808,9 +769,9 @@ func TestTaskCollection_ReadAll(t *testing.T) {
 				task31,
 				task32,
 				task33,
-				task35,
 				task39,
 				task47,
+				task48,
 			},
 			wantErr: false,
 		},
@@ -823,8 +784,8 @@ func TestTaskCollection_ReadAll(t *testing.T) {
 			},
 			args: defaultArgs,
 			want: []*Task{
+				task48,
 				task47,
-				task35,
 				task33,
 				task32,
 				task31,
@@ -974,8 +935,8 @@ func TestTaskCollection_ReadAll(t *testing.T) {
 				task31,
 				task32,
 				task33,
-				task35,
 				task47,
+				task48,
 			},
 			wantErr: false,
 		},
@@ -1040,9 +1001,9 @@ func TestTaskCollection_ReadAll(t *testing.T) {
 				task31, // has nil dates
 				task32, // has nil dates
 				task33, // has nil dates
-				task35, // has nil dates
 				task39, // has nil dates
 				task47, // has nil dates
+				task48, // has nil dates
 			},
 			wantErr: false,
 		},
@@ -1213,9 +1174,9 @@ func TestTaskCollection_ReadAll(t *testing.T) {
 				task31,
 				task32,
 				task33,
-				task35,
 				task39,
 				task47,
+				task48,
 			},
 			wantErr: false,
 		},
@@ -1256,7 +1217,6 @@ func TestTaskCollection_ReadAll(t *testing.T) {
 			args: defaultArgs,
 			want: []*Task{
 				task30,
-				task35,
 			},
 			wantErr: false,
 		},
@@ -1308,9 +1268,9 @@ func TestTaskCollection_ReadAll(t *testing.T) {
 				task31,
 				task32,
 				task33,
-				task35,
 				task39,
 				task47,
+				task48,
 			},
 			wantErr: false,
 		},
@@ -1331,7 +1291,6 @@ func TestTaskCollection_ReadAll(t *testing.T) {
 			args: defaultArgs,
 			want: []*Task{
 				task30,
-				task35,
 			},
 			wantErr: false,
 		},
@@ -1344,7 +1303,6 @@ func TestTaskCollection_ReadAll(t *testing.T) {
 			want: []*Task{
 				task1,
 				task2,
-				task35,
 			},
 			wantErr: false,
 		},
@@ -1385,9 +1343,9 @@ func TestTaskCollection_ReadAll(t *testing.T) {
 				task31,
 				task32,
 				task33,
-				task35,
 				task39,
 				task47,
+				task48,
 			},
 			wantErr: false,
 		},
@@ -1433,6 +1391,7 @@ func TestTaskCollection_ReadAll(t *testing.T) {
 				// task 35 has a label 5 and 4
 				task39,
 				task47,
+				task48,
 			},
 			wantErr: false,
 		},
@@ -1478,6 +1437,7 @@ func TestTaskCollection_ReadAll(t *testing.T) {
 				// task 35 has a label 5 and 4
 				task39,
 				task47,
+				task48,
 			},
 			wantErr: false,
 		},
@@ -1488,10 +1448,8 @@ func TestTaskCollection_ReadAll(t *testing.T) {
 			fields: fields{
 				Filter: "labels = 4 && labels = 5",
 			},
-			args: defaultArgs,
-			want: []*Task{
-				task35, // only task with both labels 4 and 5
-			},
+			args:    defaultArgs,
+			want:    []*Task{},
 			wantErr: false,
 		},
 		{
@@ -1535,6 +1493,7 @@ func TestTaskCollection_ReadAll(t *testing.T) {
 				task33,
 				task39,
 				task47,
+				task48,
 			},
 			wantErr: false,
 		},
@@ -1626,6 +1585,7 @@ func TestTaskCollection_ReadAll(t *testing.T) {
 				task31,
 				task33,
 				task47,
+				task48,
 			},
 		},
 		{
@@ -1643,9 +1603,9 @@ func TestTaskCollection_ReadAll(t *testing.T) {
 				task5,
 				task28,
 				// The other ones don't have a due date
+				task48,
 				task47,
 				task39,
-				task35,
 				task33,
 				task32,
 				task31,
@@ -1740,7 +1700,7 @@ func TestTaskCollection_ReadAll(t *testing.T) {
 	// Here we're explicitly testing search with and without paradeDB. Both return different results but that's
 	// expected - paradeDB returns more results than other databases with a naive like-search.
 
-	if db.ParadeDBAvailable() {
+	if !db.ParadeDBAvailable() {
 		tests = append(tests, testcase{
 			name:   "search for task index",
 			fields: fields{},
@@ -1750,24 +1710,31 @@ func TestTaskCollection_ReadAll(t *testing.T) {
 				page:   0,
 			},
 			want: []*Task{
-				task17, // has the text #17 in the title
 				task33, // has the index 17
 			},
 			wantErr: false,
 		})
-	} else {
-		tests = append(tests, testcase{
-			name:   "search for task index",
-			fields: fields{},
-			args: args{
-				search: "number #17",
-				a:      &user.User{ID: 1},
-				page:   0,
-			},
-			want: []*Task{
-				task33, // has the index 17
-			},
-			wantErr: false,
+	}
+
+	if db.ParadeDBAvailable() {
+		// ParadeDB fuzzy(1, prefix=true) on "17" also matches tokens within
+		// edit distance 1 ("1", "7", "10"-"19", "27", "47"), returning more results.
+		t.Run("search for task index", func(t *testing.T) {
+			db.LoadAndAssertFixtures(t)
+			s := db.NewSession()
+			defer s.Close()
+
+			lt := &TaskCollection{}
+			got, _, _, err := lt.ReadAll(s, &user.User{ID: 1}, "number #17", 0, 50)
+			require.NoError(t, err)
+			gotTasks := got.([]*Task)
+			require.Len(t, gotTasks, 14)
+			gotIDs := make([]int64, len(gotTasks))
+			for i, tsk := range gotTasks {
+				gotIDs[i] = tsk.ID
+			}
+			assert.Contains(t, gotIDs, task17.ID, "should contain task #17 (has #17 in title)")
+			assert.Contains(t, gotIDs, task33.ID, "should contain task #33 (has index 17)")
 		})
 	}
 

@@ -24,6 +24,7 @@ import (
 
 	"code.vikunja.io/api/pkg/caldav"
 	"code.vikunja.io/api/pkg/db"
+	"code.vikunja.io/api/pkg/events"
 	"code.vikunja.io/api/pkg/log"
 	"code.vikunja.io/api/pkg/models"
 	user2 "code.vikunja.io/api/pkg/user"
@@ -34,10 +35,16 @@ import (
 )
 
 // DavBasePath is the base url path
-const DavBasePath = `/dav/`
+const DavBasePath = `/dav`
 
 // ProjectBasePath is the base path for all projects resources
-const ProjectBasePath = DavBasePath + `projects`
+const ProjectBasePath = DavBasePath + `/projects`
+
+// PrincipalBasePath is the base path for all principal resources
+const PrincipalBasePath = DavBasePath + `/principals`
+
+// ProjectHomeSetPath is the CalDAV home-set path Apple clients use after discovery.
+const ProjectHomeSetPath = ProjectBasePath + `/`
 
 // VikunjaCaldavProjectStorage represents a project storage
 type VikunjaCaldavProjectStorage struct {
@@ -67,7 +74,7 @@ func (vcls *VikunjaCaldavProjectStorage) GetResources(rpath string, withChildren
 	// and not /dav/projects. I'm not sure if thats a bug in the client or in caldav-go.
 
 	if vcls.isEntry {
-		r := data.NewResource(rpath, &VikunjaProjectResourceAdapter{
+		r := data.NewResource(withTrailingSlash(rpath), &VikunjaProjectResourceAdapter{
 			isPrincipal:  true,
 			isCollection: true,
 		})
@@ -76,7 +83,7 @@ func (vcls *VikunjaCaldavProjectStorage) GetResources(rpath string, withChildren
 
 	// If the request wants the principal url, we'll return that and nothing else
 	if vcls.isPrincipal {
-		r := data.NewResource(DavBasePath+`/projects/`, &VikunjaProjectResourceAdapter{
+		r := data.NewResource(ProjectHomeSetPath, &VikunjaProjectResourceAdapter{
 			isPrincipal:  true,
 			isCollection: true,
 		})
@@ -127,6 +134,14 @@ func (vcls *VikunjaCaldavProjectStorage) GetResources(rpath string, withChildren
 	}
 	projects := theprojects.([]*models.Project)
 
+	if !withChildren {
+		r := data.NewResource(withTrailingSlash(rpath), &VikunjaProjectResourceAdapter{
+			isPrincipal:  true,
+			isCollection: true,
+		})
+		return []data.Resource{r}, nil
+	}
+
 	var resources []data.Resource
 	for _, l := range projects {
 		rr := VikunjaProjectResourceAdapter{
@@ -141,6 +156,20 @@ func (vcls *VikunjaCaldavProjectStorage) GetResources(rpath string, withChildren
 	}
 
 	return resources, nil
+}
+
+func withTrailingSlash(path string) string {
+	if path == "" {
+		return ProjectHomeSetPath
+	}
+	if strings.HasSuffix(path, "/") {
+		return path
+	}
+	return path + "/"
+}
+
+func principalPathForUser(username string) string {
+	return withTrailingSlash(PrincipalBasePath + `/` + username)
 }
 
 // GetResourcesByList fetches a list of resources from a slice of paths
@@ -311,6 +340,7 @@ func (vcls *VikunjaCaldavProjectStorage) CreateResource(rpath, content string) (
 	if err != nil {
 		log.Errorf("[CALDAV] Failed to create task in CreateResource: %v, task: %+v", err, vTask)
 		_ = s.Rollback()
+		events.CleanupPending(s)
 		return nil, err
 	}
 
@@ -319,6 +349,7 @@ func (vcls *VikunjaCaldavProjectStorage) CreateResource(rpath, content string) (
 	if err != nil {
 		log.Errorf("[CALDAV] Failed to persist labels in CreateResource: %v, labels: %+v", err, vTask.Labels)
 		_ = s.Rollback()
+		events.CleanupPending(s)
 		return nil, err
 	}
 
@@ -327,13 +358,17 @@ func (vcls *VikunjaCaldavProjectStorage) CreateResource(rpath, content string) (
 	if err != nil {
 		log.Errorf("[CALDAV] Failed to persist relations in CreateResource: %v, relations: %+v", err, vTask.RelatedTasks)
 		_ = s.Rollback()
+		events.CleanupPending(s)
 		return nil, err
 	}
 
 	if err := s.Commit(); err != nil {
 		log.Errorf("[CALDAV] Failed to commit transaction in CreateResource: %v", err)
+		events.CleanupPending(s)
 		return nil, err
 	}
+
+	events.DispatchPending(s)
 
 	// Build up the proper response
 	rr := VikunjaProjectResourceAdapter{
@@ -369,11 +404,13 @@ func (vcls *VikunjaCaldavProjectStorage) UpdateResource(rpath, content string) (
 	if err != nil {
 		log.Errorf("[CALDAV] Permission check failed in UpdateResource for user %s, task %d: %v", vcls.user.Username, vcls.task.ID, err)
 		_ = s.Rollback()
+		events.CleanupPending(s)
 		return nil, err
 	}
 	if !canUpdate {
 		log.Warningf("[CALDAV] User %s does not have permission to update task %d", vcls.user.Username, vcls.task.ID)
 		_ = s.Rollback()
+		events.CleanupPending(s)
 		return nil, errs.ForbiddenError
 	}
 
@@ -382,6 +419,7 @@ func (vcls *VikunjaCaldavProjectStorage) UpdateResource(rpath, content string) (
 	if err != nil {
 		log.Errorf("[CALDAV] Failed to update task in UpdateResource: %v, task: %+v", err, vTask)
 		_ = s.Rollback()
+		events.CleanupPending(s)
 		return nil, err
 	}
 
@@ -389,6 +427,7 @@ func (vcls *VikunjaCaldavProjectStorage) UpdateResource(rpath, content string) (
 	if err != nil {
 		log.Errorf("[CALDAV] Failed to persist labels in UpdateResource: %v, labels: %+v", err, vTask.Labels)
 		_ = s.Rollback()
+		events.CleanupPending(s)
 		return nil, err
 	}
 
@@ -396,13 +435,17 @@ func (vcls *VikunjaCaldavProjectStorage) UpdateResource(rpath, content string) (
 	if err != nil {
 		log.Errorf("[CALDAV] Failed to persist relations in UpdateResource: %v, relations: %+v", err, vTask.RelatedTasks)
 		_ = s.Rollback()
+		events.CleanupPending(s)
 		return nil, err
 	}
 
 	if err := s.Commit(); err != nil {
 		log.Errorf("[CALDAV] Failed to commit transaction in UpdateResource: %v", err)
+		events.CleanupPending(s)
 		return nil, err
 	}
+
+	events.DispatchPending(s)
 
 	// Build up the proper response
 	rr := VikunjaProjectResourceAdapter{
@@ -423,9 +466,11 @@ func (vcls *VikunjaCaldavProjectStorage) DeleteResource(_ string) error {
 		canDelete, err := vcls.task.CanDelete(s, vcls.user)
 		if err != nil {
 			_ = s.Rollback()
+			events.CleanupPending(s)
 			return err
 		}
 		if !canDelete {
+			events.CleanupPending(s)
 			return errs.ForbiddenError
 		}
 
@@ -433,10 +478,17 @@ func (vcls *VikunjaCaldavProjectStorage) DeleteResource(_ string) error {
 		err = vcls.task.Delete(s, vcls.user)
 		if err != nil {
 			_ = s.Rollback()
+			events.CleanupPending(s)
 			return err
 		}
 
-		return s.Commit()
+		err = s.Commit()
+		if err != nil {
+			events.CleanupPending(s)
+			return err
+		}
+
+		events.DispatchPending(s)
 	}
 
 	return nil
@@ -498,6 +550,25 @@ func removeStaleRelations(s *xorm.Session, a web.Auth, task *models.Task, newRel
 	}
 
 	for relationKind, relatedTasks := range existingTask.RelatedTasks {
+
+		// Only process CalDAV-compatible relation kinds (parenttask, subtask).
+		// Other kinds (related, blocking, etc.) are never set via CalDAV and
+		// should not be removed here.
+		if relationKind != models.RelationKindParenttask && relationKind != models.RelationKindSubtask {
+			continue
+		}
+
+		// For subtask relations: only consider removal if the VTODO explicitly
+		// declares RELATED-TO;RELTYPE=CHILD (i.e., subtask kind is a key in
+		// newRelations). Subtask relations are often auto-created as inverses
+		// when child tasks declare RELATED-TO;RELTYPE=PARENT pointing to this
+		// task. Removing them just because this task's VTODO doesn't mention
+		// RELATED-TO;RELTYPE=CHILD would break those child-declared links.
+		if relationKind == models.RelationKindSubtask {
+			if _, hasSubtaskKind := newRelations[models.RelationKindSubtask]; !hasSubtaskKind {
+				continue
+			}
+		}
 
 		for _, relatedTask := range relatedTasks {
 			relationInNewList := slices.ContainsFunc(newRelations[relationKind], func(newRelation *models.Task) bool { return newRelation.UID == relatedTask.UID })
@@ -591,15 +662,6 @@ func (vlra *VikunjaProjectResourceAdapter) IsCollection() bool {
 // CalculateEtag returns the etag of a resource
 func (vlra *VikunjaProjectResourceAdapter) CalculateEtag() string {
 
-	// If we're updating a task, the client sends the etag of the project instead of the one from the task.
-	// And therefore, updating the task fails since these etags don't match.
-	// To fix that, we use this extra field to determine if we're currently updating a task and return the
-	// etag of the project instead.
-	// if vlra.project != nil {
-	//	 return `"` + strconv.FormatInt(vlra.project.ID, 10) + `-` + strconv.FormatInt(vlra.project.Updated, 10) + `"`
-	// }
-
-	// Return the etag of a task if we have one
 	if vlra.task != nil {
 		return `"` + strconv.FormatInt(vlra.task.ID, 10) + `-` + strconv.FormatInt(vlra.task.Updated.Unix(), 10) + `"`
 	}
@@ -608,10 +670,17 @@ func (vlra *VikunjaProjectResourceAdapter) CalculateEtag() string {
 		return ""
 	}
 
-	// This also returns the etag of the project, and not of the task,
-	// which becomes problematic because the client uses this etag (= the one from the project) to make
-	// Requests to update a task. These do not match and thus updating a task fails.
-	return `"` + strconv.FormatInt(vlra.project.ID, 10) + `-` + strconv.FormatInt(vlra.project.Updated.Unix(), 10) + `"`
+	// For collections, use the latest modification time across all tasks
+	// so that the etag (and derived ctag/sync-token) changes whenever
+	// any task in the project is added, modified, or deleted.
+	latest := vlra.project.Updated
+	for _, t := range vlra.projectTasks {
+		if t.Updated.After(latest) {
+			latest = t.Updated
+		}
+	}
+
+	return `"` + strconv.FormatInt(vlra.project.ID, 10) + `-` + strconv.FormatInt(latest.Unix(), 10) + `"`
 }
 
 // GetContent returns the content string of a resource (a task in our case)

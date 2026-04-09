@@ -41,6 +41,96 @@ definitions:
       username_fallback:
         type: boolean
     type: object
+  csv.ColumnMapping:
+    properties:
+      attribute:
+        $ref: '#/definitions/csv.TaskAttribute'
+      column_index:
+        type: integer
+      column_name:
+        type: string
+    type: object
+  csv.DetectionResult:
+    properties:
+      columns:
+        items:
+          type: string
+        type: array
+      date_format:
+        type: string
+      delimiter:
+        type: string
+      preview_rows:
+        items:
+          items:
+            type: string
+          type: array
+        type: array
+      quote_char:
+        type: string
+      suggested_mapping:
+        items:
+          $ref: '#/definitions/csv.ColumnMapping'
+        type: array
+    type: object
+  csv.PreviewResult:
+    properties:
+      tasks:
+        items:
+          $ref: '#/definitions/csv.PreviewTask'
+        type: array
+      total_rows:
+        type: integer
+    type: object
+  csv.PreviewTask:
+    properties:
+      description:
+        type: string
+      done:
+        type: boolean
+      due_date:
+        type: string
+      end_date:
+        type: string
+      labels:
+        items:
+          type: string
+        type: array
+      priority:
+        type: integer
+      project:
+        type: string
+      start_date:
+        type: string
+      title:
+        type: string
+    type: object
+  csv.TaskAttribute:
+    enum:
+    - title
+    - description
+    - due_date
+    - start_date
+    - end_date
+    - done
+    - priority
+    - labels
+    - project
+    - reminder
+    - ignore
+    type: string
+    x-enum-varnames:
+    - AttrTitle
+    - AttrDescription
+    - AttrDueDate
+    - AttrStartDate
+    - AttrEndDate
+    - AttrDone
+    - AttrPriority
+    - AttrLabels
+    - AttrProject
+    - AttrReminder
+    - AttrIgnore
   files.File:
     properties:
       created:
@@ -840,6 +930,13 @@ definitions:
       updated:
         type: string
     type: object
+  models.TaskDuplicate:
+    properties:
+      duplicated_task:
+        allOf:
+        - $ref: '#/definitions/models.Task'
+        description: The duplicated task
+    type: object
   models.TaskPosition:
     properties:
       position:
@@ -1141,6 +1238,10 @@ definitions:
         description: A timestamp when this webhook target was last updated. You cannot
           change this value.
         type: string
+      user_id:
+        description: The user ID if this is a user-level webhook (mutually exclusive
+          with ProjectID)
+        type: integer
     type: object
   notifications.DatabaseNotification:
     properties:
@@ -1215,6 +1316,8 @@ definitions:
     properties:
       new_password:
         description: The new password for this user.
+        maxLength: 72
+        minLength: 8
         type: string
       token:
         description: The previously issued reset token.
@@ -1311,6 +1414,8 @@ definitions:
   v1.UserPassword:
     properties:
       new_password:
+        maxLength: 72
+        minLength: 8
         type: string
       old_password:
         type: string
@@ -2183,6 +2288,130 @@ paths:
       summary: Login
       tags:
       - auth
+  /migration/csv/detect:
+    put:
+      consumes:
+      - multipart/form-data
+      description: Analyzes a CSV file and returns auto-detected columns, delimiter,
+        quote character, and date format with suggested column mappings.
+      parameters:
+      - description: The CSV file to analyze
+        in: formData
+        name: import
+        required: true
+        type: file
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Detection results with suggested mappings
+          schema:
+            $ref: '#/definitions/csv.DetectionResult'
+        "400":
+          description: Invalid CSV file
+          schema:
+            $ref: '#/definitions/models.Message'
+        "500":
+          description: Internal server error
+          schema:
+            $ref: '#/definitions/models.Message'
+      security:
+      - JWTKeyAuth: []
+      summary: Detect CSV structure
+      tags:
+      - migration
+  /migration/csv/migrate:
+    put:
+      consumes:
+      - multipart/form-data
+      description: Imports tasks from a CSV file into Vikunja with the provided configuration.
+      parameters:
+      - description: The CSV file to import
+        in: formData
+        name: import
+        required: true
+        type: file
+      - description: The import configuration JSON
+        in: formData
+        name: config
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: A message telling you everything was migrated successfully.
+          schema:
+            $ref: '#/definitions/models.Message'
+        "400":
+          description: Invalid CSV file or configuration
+          schema:
+            $ref: '#/definitions/models.Message'
+        "500":
+          description: Internal server error
+          schema:
+            $ref: '#/definitions/models.Message'
+      security:
+      - JWTKeyAuth: []
+      summary: Import CSV file
+      tags:
+      - migration
+  /migration/csv/preview:
+    put:
+      consumes:
+      - multipart/form-data
+      description: Generates a preview of the first 5 tasks that would be imported
+        with the given configuration.
+      parameters:
+      - description: The CSV file to preview
+        in: formData
+        name: import
+        required: true
+        type: file
+      - description: The import configuration JSON
+        in: formData
+        name: config
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Preview of tasks to import
+          schema:
+            $ref: '#/definitions/csv.PreviewResult'
+        "400":
+          description: Invalid CSV file or configuration
+          schema:
+            $ref: '#/definitions/models.Message'
+        "500":
+          description: Internal server error
+          schema:
+            $ref: '#/definitions/models.Message'
+      security:
+      - JWTKeyAuth: []
+      summary: Preview CSV import
+      tags:
+      - migration
+  /migration/csv/status:
+    get:
+      description: Returns if the current user already did the CSV migration or not.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: The migration status
+          schema:
+            $ref: '#/definitions/migration.Status'
+        "500":
+          description: Internal server error
+          schema:
+            $ref: '#/definitions/models.Message'
+      security:
+      - JWTKeyAuth: []
+      summary: Get CSV migration status
+      tags:
+      - migration
   /migration/microsoft-todo/auth:
     get:
       description: Returns the auth url where the user needs to get its auth code.
@@ -2255,7 +2484,7 @@ paths:
       tags:
       - migration
   /migration/ticktick/migrate:
-    post:
+    put:
       consumes:
       - application/x-www-form-urlencoded
       description: Imports all projects, tasks, notes, reminders, subtasks and files
@@ -2476,6 +2705,55 @@ paths:
   /migration/vikunja-file/status:
     get:
       description: Returns if the current user already did the migation or not. This
+        is useful to show a confirmation message in the frontend if the user is trying
+        to do the same migration again.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: The migration status
+          schema:
+            $ref: '#/definitions/migration.Status'
+        "500":
+          description: Internal server error
+          schema:
+            $ref: '#/definitions/models.Message'
+      security:
+      - JWTKeyAuth: []
+      summary: Get migration status
+      tags:
+      - migration
+  /migration/wekan/migrate:
+    put:
+      consumes:
+      - application/x-www-form-urlencoded
+      description: Imports all projects, tasks, labels, checklists, and comments from
+        a WeKan board JSON export into Vikunja.
+      parameters:
+      - description: The WeKan board JSON export file.
+        in: formData
+        name: import
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: A message telling you everything was migrated successfully.
+          schema:
+            $ref: '#/definitions/models.Message'
+        "500":
+          description: Internal server error
+          schema:
+            $ref: '#/definitions/models.Message'
+      security:
+      - JWTKeyAuth: []
+      summary: Import all projects, tasks etc. from a WeKan board export
+      tags:
+      - migration
+  /migration/wekan/status:
+    get:
+      description: Returns if the current user already did the migration or not. This
         is useful to show a confirmation message in the frontend if the user is trying
         to do the same migration again.
       produces:
@@ -3347,7 +3625,7 @@ paths:
           can set this multiple times with different values.
         in: query
         name: expand
-        type: array
+        type: string
       produces:
       - application/json
       responses:
@@ -4427,8 +4705,7 @@ paths:
         in: query
         name: filter_include_nulls
         type: string
-      - collectionFormat: csv
-        description: If set to `subtasks`, Vikunja will fetch only tasks which do
+      - description: If set to `subtasks`, Vikunja will fetch only tasks which do
           not have subtasks and then in a second step, will fetch all of these subtasks.
           This may result in more tasks than the pagination limit being returned,
           but all subtasks will be present in the response. If set to `buckets`, the
@@ -4437,10 +4714,8 @@ paths:
           the first 50 comments of each task will be present in the response. You
           can set this multiple times with different values.
         in: query
-        items:
-          type: string
         name: expand
-        type: array
+        type: string
       produces:
       - application/json
       responses:
@@ -4502,8 +4777,7 @@ paths:
         name: id
         required: true
         type: integer
-      - collectionFormat: csv
-        description: If set to `subtasks`, Vikunja will fetch only tasks which do
+      - description: If set to `subtasks`, Vikunja will fetch only tasks which do
           not have subtasks and then in a second step, will fetch all of these subtasks.
           This may result in more tasks than the pagination limit being returned,
           but all subtasks will be present in the response. If set to `buckets`, the
@@ -4512,10 +4786,8 @@ paths:
           the first 50 comments of each task will be present in the response. You
           can set this multiple times with different values.
         in: query
-        items:
-          type: string
         name: expand
-        type: array
+        type: string
       produces:
       - application/json
       responses:
@@ -5218,8 +5490,8 @@ paths:
     get:
       consumes:
       - application/json
-      description: Remove a task comment. The user doing this need to have at least
-        read access to the task this comment belongs to.
+      description: Get a task comment. The user doing this need to have at least read
+        access to the task this comment belongs to.
       parameters:
       - description: Task ID
         in: path
@@ -5252,7 +5524,7 @@ paths:
             $ref: '#/definitions/models.Message'
       security:
       - JWTKeyAuth: []
-      summary: Remove a task comment
+      summary: Get a task comment
       tags:
       - task
     post:
@@ -5293,6 +5565,39 @@ paths:
       security:
       - JWTKeyAuth: []
       summary: Update an existing task comment
+      tags:
+      - task
+  /tasks/{taskID}/duplicate:
+    put:
+      consumes:
+      - application/json
+      description: Copies a task with all its properties (labels, assignees, attachments,
+        reminders) into the same project. Creates a "copied from" relation between
+        the new and original task.
+      parameters:
+      - description: The task ID to duplicate
+        in: path
+        name: taskID
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: The duplicated task.
+          schema:
+            $ref: '#/definitions/models.TaskDuplicate'
+        "403":
+          description: The user does not have access to the task.
+          schema:
+            $ref: '#/definitions/web.HTTPError'
+        "500":
+          description: Internal error
+          schema:
+            $ref: '#/definitions/models.Message'
+      security:
+      - JWTKeyAuth: []
+      summary: Duplicate a task
       tags:
       - task
   /tasks/{taskID}/labels/bulk:
@@ -5763,6 +6068,30 @@ paths:
       summary: Reset the db to a defined state
       tags:
       - testing
+  /test/all:
+    delete:
+      description: Removes all data from every Vikunja table. Used by e2e tests to
+        ensure clean state before each test. Requires the testing token.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: All tables truncated.
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/web.HTTPError'
+        "500":
+          description: Internal server error.
+          schema:
+            $ref: '#/definitions/models.Message'
+      summary: Truncate all tables
+      tags:
+      - testing
   /tokens:
     get:
       consumes:
@@ -6089,6 +6418,19 @@ paths:
       summary: Request a user data export.
       tags:
       - user
+  /user/logout:
+    post:
+      description: Destroys the current session and clears the refresh token cookie.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Successfully logged out.
+          schema:
+            $ref: '#/definitions/models.Message'
+      summary: Logout
+      tags:
+      - auth
   /user/password:
     post:
       consumes:
@@ -6593,6 +6935,142 @@ paths:
       summary: Totp QR Code
       tags:
       - user
+  /user/settings/webhooks:
+    get:
+      consumes:
+      - application/json
+      description: Get all webhook targets configured for the current user (not project-specific).
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: The list of webhook targets
+          schema:
+            items:
+              $ref: '#/definitions/models.Webhook'
+            type: array
+        "500":
+          description: Internal server error
+          schema:
+            $ref: '#/definitions/models.Message'
+      security:
+      - JWTKeyAuth: []
+      summary: Get all user-level webhook targets
+      tags:
+      - webhooks
+    put:
+      consumes:
+      - application/json
+      description: Create a webhook target for the current user that receives events
+        across all projects.
+      parameters:
+      - description: The webhook target
+        in: body
+        name: webhook
+        required: true
+        schema:
+          $ref: '#/definitions/models.Webhook'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: The created webhook target
+          schema:
+            $ref: '#/definitions/models.Webhook'
+        "400":
+          description: Invalid webhook
+          schema:
+            $ref: '#/definitions/web.HTTPError'
+        "500":
+          description: Internal server error
+          schema:
+            $ref: '#/definitions/models.Message'
+      security:
+      - JWTKeyAuth: []
+      summary: Create a user-level webhook target
+      tags:
+      - webhooks
+  /user/settings/webhooks/{id}:
+    delete:
+      consumes:
+      - application/json
+      description: Delete a user-level webhook target.
+      parameters:
+      - description: Webhook ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Successfully deleted
+          schema:
+            $ref: '#/definitions/models.Message'
+        "404":
+          description: Webhook not found
+          schema:
+            $ref: '#/definitions/web.HTTPError'
+        "500":
+          description: Internal server error
+          schema:
+            $ref: '#/definitions/models.Message'
+      security:
+      - JWTKeyAuth: []
+      summary: Delete a user-level webhook target
+      tags:
+      - webhooks
+    post:
+      consumes:
+      - application/json
+      description: Update the events for a user-level webhook target.
+      parameters:
+      - description: Webhook ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: The updated webhook target
+          schema:
+            $ref: '#/definitions/models.Webhook'
+        "404":
+          description: Webhook not found
+          schema:
+            $ref: '#/definitions/web.HTTPError'
+        "500":
+          description: Internal server error
+          schema:
+            $ref: '#/definitions/models.Message'
+      security:
+      - JWTKeyAuth: []
+      summary: Update a user-level webhook target
+      tags:
+      - webhooks
+  /user/settings/webhooks/events:
+    get:
+      consumes:
+      - application/json
+      description: Get all webhook events that can be used with user-level webhook
+        targets.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: The list of user-directed webhook events
+          schema:
+            items:
+              type: string
+            type: array
+      security:
+      - JWTKeyAuth: []
+      summary: Get available user-directed webhook events
+      tags:
+      - webhooks
   /user/timezones:
     get:
       consumes:
@@ -6623,7 +7101,8 @@ paths:
     post:
       consumes:
       - application/json
-      description: Returns a new valid jwt user token with an extended length.
+      description: Returns a new valid jwt link share token. Only works for link share
+        tokens.
       produces:
       - application/json
       responses:
@@ -6632,18 +7111,37 @@ paths:
           schema:
             $ref: '#/definitions/auth.Token'
         "400":
-          description: Only user token are available for renew.
+          description: Only link share tokens can be renewed.
           schema:
             $ref: '#/definitions/models.Message'
-      summary: Renew user token
+      summary: Renew link share token
       tags:
-      - user
+      - auth
+  /user/token/refresh:
+    post:
+      description: Exchanges the refresh token cookie for a new short-lived JWT.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/auth.Token'
+        "401":
+          description: Invalid or expired refresh token.
+          schema:
+            $ref: '#/definitions/models.Message'
+      summary: Refresh user token
+      tags:
+      - auth
   /users:
     get:
       consumes:
       - application/json
       description: Search for a user by its username, name or full email. Name (not
-        username) or email require that the user has enabled this in their settings.
+        username) or email require that the user has enabled this in their settings,
+        unless both users share an external team (synced via OIDC/LDAP), in which
+        case they can always find each other.
       parameters:
       - description: The search criteria.
         in: query

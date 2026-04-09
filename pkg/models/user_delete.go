@@ -45,6 +45,7 @@ func deleteUsers() {
 	users := []*user.User{}
 	err := s.Where(builder.Lt{"deletion_scheduled_at": time.Now()}).
 		Find(&users)
+	s.Close()
 	if err != nil {
 		log.Errorf("Could not get users scheduled for deletion: %s", err)
 		return
@@ -64,26 +65,24 @@ func deleteUsers() {
 			continue
 		}
 
-		err = s.Begin()
-		if err != nil {
-			log.Errorf("Could not start transaction: %s", err)
-			return
-		}
+		func() {
+			us := db.NewSession()
+			defer us.Close()
 
-		err = DeleteUser(s, u)
-		if err != nil {
-			_ = s.Rollback()
-			log.Errorf("Could not delete u %d: %s", u.ID, err)
-			return
-		}
+			err = DeleteUser(us, u)
+			if err != nil {
+				_ = us.Rollback()
+				log.Errorf("Could not delete u %d: %s", u.ID, err)
+				return
+			}
 
-		log.Debugf("Deleted user %d", u.ID)
+			log.Debugf("Deleted user %d", u.ID)
 
-		err = s.Commit()
-		if err != nil {
-			log.Errorf("Could not commit transaction: %s", err)
-			return
-		}
+			err = us.Commit()
+			if err != nil {
+				log.Errorf("Could not commit transaction: %s", err)
+			}
+		}()
 	}
 }
 
@@ -170,14 +169,17 @@ func DeleteUser(s *xorm.Session, u *user.User) (err error) {
 		}
 	}
 
-	_, err = s.Where("id = ?", u.ID).Delete(&user.User{})
+	// Notify before deleting the user row, because ShouldNotify will try to
+	// look up the user and fail if the row is already gone.
+	err = notifications.Notify(u, &user.AccountDeletedNotification{
+		User: u,
+	}, s)
 	if err != nil {
 		return err
 	}
 
-	return notifications.Notify(u, &user.AccountDeletedNotification{
-		User: u,
-	})
+	_, err = s.Where("id = ?", u.ID).Delete(&user.User{})
+	return err
 }
 
 func ensureProjectAdminUser(s *xorm.Session, l *Project) (hadUsers bool, err error) {

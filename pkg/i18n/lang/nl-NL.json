@@ -71,23 +71,21 @@
 				"message": "Dit is een vriendelijke herinnering voor taak \"%[1]s\" (%[2]s)."
 			},
 			"comment": {
-				"subject": "Re: %[1]s",
-				"mentioned_subject": "%[1]s noemde je in een reactie in \"%[2]s\"",
 				"mentioned_message": "**%[1]s** noemde je in een reactie:"
 			},
 			"assigned": {
 				"subject_to_assignee": "Je bent toegewezen aan \"%[1]s\" (%[2]s)",
 				"message_to_assignee": "%[1]s heeft je toegewezen aan \"%[2]s\".",
 				"subject_to_others": "\"%[1]s\" (%[2]s) is toegewezen aan %[3]s",
-				"message_to_others": "%[1]s heeft deze taak toegewezen aan %[2]s."
+				"message_to_others": "%[1]s heeft deze taak toegewezen aan %[2]s.",
+				"subject_to_others_self": "\"%[1]s\" (%[2]s) is toegewezen door %[3]s aan zichzelf",
+				"message_to_others_self": "%[1]s heeft deze taak aan zichzelf toegewezen."
 			},
 			"deleted": {
 				"subject": "\"%[1]s\" (%[2]s) is verwijderd",
 				"message": "%[1]s verwijderde taak \"%[2]s\" (%[3]s)"
 			},
 			"mentioned": {
-				"subject_new": "%[1]s noemde je in nieuwe taak \"%[2]s\"",
-				"subject": "%[1]s noemde je in een taak \"%[2]s\"",
 				"message": "**%[1]s** noemde je in een taak:"
 			},
 			"overdue": {
@@ -135,7 +133,6 @@
 			"have_nice_day": "Fijne dag!",
 			"copy_url": "Als bovenstaande knop niet werkt, kopieer dan onderstaande URL en plak deze in de adresbalk van je browser:",
 			"actions": {
-				"open_task": "Taak openen",
 				"open_vikunja": "Vikunja openen",
 				"open_project": "Project openen",
 				"open_team": "Team openen",

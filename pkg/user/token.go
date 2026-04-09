@@ -122,6 +122,14 @@ func removeTokenByID(s *xorm.Session, u *User, kind TokenKind, id int64) (err er
 	return
 }
 
+// CleanupOldTokens removes all password reset and account deletion tokens older than 24 hours.
+func CleanupOldTokens(s *xorm.Session) (deleted int64, err error) {
+	deleted, err = s.
+		Where("created < ? AND (kind = ? OR kind = ?)", time.Now().Add(time.Hour*24*-1), TokenPasswordReset, TokenAccountDeletion).
+		Delete(&Token{})
+	return
+}
+
 // RegisterTokenCleanupCron registers a cron function to clean up all password reset tokens older than 24 hours
 func RegisterTokenCleanupCron() {
 	const logPrefix = "[User Token Cleanup Cron] "
@@ -130,15 +138,17 @@ func RegisterTokenCleanupCron() {
 		s := db.NewSession()
 		defer s.Close()
 
-		deleted, err := s.
-			Where("created > ? AND (kind = ? OR kind = ?)", time.Now().Add(time.Hour*24*-1), TokenPasswordReset, TokenAccountDeletion).
-			Delete(&Token{})
+		deleted, err := CleanupOldTokens(s)
 		if err != nil {
 			log.Errorf(logPrefix+"Error removing old password reset tokens: %s", err)
 			return
 		}
 		if deleted > 0 {
 			log.Debugf(logPrefix+"Deleted %d old password reset tokens", deleted)
+		}
+
+		if err := s.Commit(); err != nil {
+			log.Errorf(logPrefix+"Error committing token cleanup: %s", err)
 		}
 	})
 	if err != nil {

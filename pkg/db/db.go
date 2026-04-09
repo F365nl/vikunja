@@ -47,6 +47,30 @@ var (
 	paradedbInstalled bool
 )
 
+// registeredTables holds all table beans registered by Vikunja packages.
+var registeredTables []interface{}
+
+// RegisterTables registers table beans so that Dump and WipeEverything
+// only operate on known Vikunja tables.
+func RegisterTables(tables []interface{}) {
+	registeredTables = append(registeredTables, tables...)
+}
+
+// RegisteredTableNames returns the table names of all registered Vikunja tables.
+func RegisteredTableNames() []string {
+	tableNames := make([]string, 0, len(registeredTables)+1)
+	for _, bean := range registeredTables {
+		tableInfo, err := x.TableInfo(bean)
+		if err != nil {
+			log.Fatalf("Could not get table info for bean: %v", err)
+		}
+		tableNames = append(tableNames, tableInfo.Name)
+	}
+	// The xormigrate migration tracking table is not registered via GetTables()
+	tableNames = append(tableNames, "migration")
+	return tableNames
+}
+
 // CreateDBEngine initializes a db engine from the config
 func CreateDBEngine() (engine *xorm.Engine, err error) {
 
@@ -250,7 +274,23 @@ func initSqliteEngine() (engine *xorm.Engine, err error) {
 	}
 
 	if path == "memory" {
-		return xorm.NewEngine("sqlite3", "file::memory:?cache=shared")
+		// Use a temp file with WAL mode instead of in-memory shared cache.
+		// Shared cache (file::memory:?cache=shared) uses table-level locking
+		// where _busy_timeout is ineffective (returns SQLITE_LOCKED, not
+		// SQLITE_BUSY) and concurrent connections deadlock. A temp file with
+		// WAL mode provides proper concurrency: readers never block writers,
+		// and _busy_timeout handles write-write contention.
+		tmpDir, mkErr := os.MkdirTemp("", "vikunja-*")
+		if mkErr != nil {
+			return nil, fmt.Errorf("could not create temp directory for ephemeral database: %w", mkErr)
+		}
+		dbPath := filepath.Join(tmpDir, "vikunja.db")
+		engine, err = xorm.NewEngine("sqlite3", dbPath+"?_busy_timeout=5000&_journal_mode=WAL")
+		if err != nil {
+			return
+		}
+		log.Infof("Using ephemeral SQLite database at: %s", dbPath)
+		return
 	}
 
 	// Log the resolved database path
@@ -276,7 +316,11 @@ func initSqliteEngine() (engine *xorm.Engine, err error) {
 		_ = os.Remove(path) // Remove the file to not prevent the db from creating another one
 	}
 
-	return xorm.NewEngine("sqlite3", path)
+	// WAL mode allows concurrent readers alongside a single writer without
+	// blocking each other. busy_timeout makes concurrent writers wait (up to
+	// 5 s) instead of failing immediately with SQLITE_BUSY.
+	engine, err = xorm.NewEngine("sqlite3", path+"?_busy_timeout=5000&_journal_mode=WAL")
+	return
 }
 
 // getUserDataDir returns the platform-appropriate directory for application data
@@ -318,7 +362,7 @@ func getUserDataDir() (string, error) {
 	}
 
 	// Ensure the directory exists
-	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+	if err := os.MkdirAll(dataDir, 0o700); err != nil { // #nosec G703 -- dataDir is from config or XDG standard paths
 		return "", fmt.Errorf("could not create data directory %s: %w", dataDir, err)
 	}
 
@@ -386,16 +430,10 @@ func isSystemDirectory(path string) bool {
 	return false
 }
 
-// WipeEverything wipes all tables and their data. Use with caution...
+// WipeEverything wipes all Vikunja tables and their data. Use with caution...
 func WipeEverything() error {
-
-	tables, err := x.DBMetas()
-	if err != nil {
-		return err
-	}
-
-	for _, t := range tables {
-		if err := x.DropTables(t.Name); err != nil {
+	for _, name := range RegisteredTableNames() {
+		if err := x.DropTables(name); err != nil {
 			return err
 		}
 	}
@@ -403,9 +441,15 @@ func WipeEverything() error {
 	return nil
 }
 
-// NewSession creates a new xorm session
+// NewSession creates a new xorm session with an active transaction.
+// The caller must call s.Commit() on success or s.Rollback() on error.
+// s.Close() will auto-rollback any uncommitted transaction.
 func NewSession() *xorm.Session {
-	return x.NewSession()
+	s := x.NewSession()
+	if err := s.Begin(); err != nil {
+		log.Fatalf("Failed to begin database transaction: %s", err)
+	}
+	return s
 }
 
 // Type returns the db type of the currently configured db

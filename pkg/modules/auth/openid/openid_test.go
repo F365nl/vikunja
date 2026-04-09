@@ -124,14 +124,14 @@ func TestGetOrCreateUser(t *testing.T) {
 			},
 		}
 
-		provider := &Provider{}
+		provider := &Provider{Name: "Vikunja Login"}
 		idToken := &oidc.IDToken{Issuer: "https://some.service.com", Subject: "12345"}
 
 		u, err := getOrCreateUser(s, cl, provider, idToken)
 		require.NoError(t, err)
 		teamData := getTeamDataFromToken(cl.VikunjaGroups, nil)
 		require.NoError(t, err)
-		err = models.SyncExternalTeamsForUser(s, u, teamData, "https://some.issuer", "OIDC")
+		err = models.SyncExternalTeamsForUser(s, u, teamData, "https://some.issuer", provider.Name)
 		require.NoError(t, err)
 		err = s.Commit()
 		require.NoError(t, err)
@@ -141,7 +141,7 @@ func TestGetOrCreateUser(t *testing.T) {
 			"email": cl.Email,
 		}, false)
 		db.AssertExists(t, "teams", map[string]interface{}{
-			"name":        team + " (OIDC)",
+			"name":        team + " (" + provider.Name + ")",
 			"external_id": oidcID,
 			"is_public":   false,
 		}, false)
@@ -161,19 +161,19 @@ func TestGetOrCreateUser(t *testing.T) {
 			},
 		}
 
-		provider := &Provider{}
+		provider := &Provider{Name: "Vikunja Login"}
 		idToken := &oidc.IDToken{Issuer: "https://some.service.com", Subject: "12345"}
 
 		u, err := getOrCreateUser(s, cl, provider, idToken)
 		require.NoError(t, err)
 		teamData := getTeamDataFromToken(cl.VikunjaGroups, nil)
-		err = models.SyncExternalTeamsForUser(s, u, teamData, "https://some.issuer", "OIDC")
+		err = models.SyncExternalTeamsForUser(s, u, teamData, "https://some.issuer", provider.Name)
 		require.NoError(t, err)
 		err = s.Commit()
 		require.NoError(t, err)
 
 		db.AssertExists(t, "teams", map[string]interface{}{
-			"name":        team + " (OIDC)",
+			"name":        team + " (" + provider.Name + ")",
 			"external_id": oidcID,
 			"is_public":   true,
 		}, false)
@@ -195,7 +195,7 @@ func TestGetOrCreateUser(t *testing.T) {
 
 		u := &user.User{ID: 10}
 		teamData := getTeamDataFromToken(cl.VikunjaGroups, nil)
-		err := models.SyncExternalTeamsForUser(s, u, teamData, "https://some.issuer", "OIDC")
+		err := models.SyncExternalTeamsForUser(s, u, teamData, "https://some.issuer", "Vikunja Login")
 		require.NoError(t, err)
 		err = s.Commit()
 		require.NoError(t, err)
@@ -216,7 +216,9 @@ func TestGetOrCreateUser(t *testing.T) {
 
 		u := &user.User{ID: 10}
 		teamData := getTeamDataFromToken(cl.VikunjaGroups, nil)
-		err := models.SyncExternalTeamsForUser(s, u, teamData, "https://some.issuer", "OIDC")
+		err := models.SyncExternalTeamsForUser(s, u, teamData, "https://some.issuer", "Vikunja Login")
+		require.NoError(t, err)
+		err = s.Commit()
 		require.NoError(t, err)
 
 		db.AssertMissing(t, "team_members", map[string]interface{}{
@@ -415,5 +417,51 @@ func TestMergeClaims(t *testing.T) {
 		require.Error(t, err)
 		var expectedErr *user.ErrNoOpenIDEmailProvided
 		assert.ErrorAs(t, err, &expectedErr)
+	})
+}
+
+func TestSyncUserAvatarFromOpenID(t *testing.T) {
+	t.Run("empty picture URL resets openid provider to default", func(t *testing.T) {
+		db.LoadAndAssertFixtures(t)
+		s := db.NewSession()
+		defer s.Close()
+
+		// Use the fixture user that has avatar_provider = "openid"
+		u, err := user.GetUserByID(s, 19)
+		require.NoError(t, err)
+		assert.Equal(t, "openid", u.AvatarProvider, "precondition: user should have openid avatar provider")
+
+		err = syncUserAvatarFromOpenID(s, u, "")
+		require.NoError(t, err)
+		err = s.Commit()
+		require.NoError(t, err)
+
+		// Verify the avatar provider was reset to default in the database
+		db.AssertExists(t, "users", map[string]interface{}{
+			"id":              19,
+			"avatar_provider": "default",
+		}, false)
+	})
+
+	t.Run("empty picture URL does not reset non-openid provider", func(t *testing.T) {
+		db.LoadAndAssertFixtures(t)
+		s := db.NewSession()
+		defer s.Close()
+
+		// Use a regular user (avatar_provider is empty/"default")
+		u, err := user.GetUserByID(s, 1)
+		require.NoError(t, err)
+
+		err = syncUserAvatarFromOpenID(s, u, "")
+		require.NoError(t, err)
+		err = s.Commit()
+		require.NoError(t, err)
+
+		// Verify the avatar provider was NOT changed to "default" or anything else
+		s2 := db.NewSession()
+		defer s2.Close()
+		updatedUser, err := user.GetUserByID(s2, 1)
+		require.NoError(t, err)
+		assert.Empty(t, updatedUser.AvatarProvider, "avatar provider should remain empty for non-openid user")
 	})
 }

@@ -99,11 +99,12 @@ func (tc *TaskComment) CreateWithTimestamps(s *xorm.Session, a web.Auth) (err er
 		}
 	}
 
-	return events.Dispatch(&TaskCommentCreatedEvent{
+	events.DispatchOnCommit(s, &TaskCommentCreatedEvent{
 		Task:    &task,
 		Comment: tc,
 		Doer:    tc.Author,
 	})
+	return nil
 }
 
 // Delete removes a task comment
@@ -144,11 +145,12 @@ func (tc *TaskComment) Delete(s *xorm.Session, a web.Auth) error {
 		return err
 	}
 
-	return events.Dispatch(&TaskCommentDeletedEvent{
+	events.DispatchOnCommit(s, &TaskCommentDeletedEvent{
 		Task:    &task,
 		Comment: tc,
 		Doer:    doer,
 	})
+	return nil
 }
 
 // Update updates a task text by its ID
@@ -183,18 +185,26 @@ func (tc *TaskComment) Update(s *xorm.Session, _ web.Auth) error {
 		return err
 	}
 
-	return events.Dispatch(&TaskCommentUpdatedEvent{
+	events.DispatchOnCommit(s, &TaskCommentUpdatedEvent{
 		Task:    &task,
 		Comment: tc,
 		Doer:    tc.Author,
 	})
+	return nil
 }
 
 func getTaskCommentSimple(s *xorm.Session, tc *TaskComment) error {
-	exists, err := s.
+	query := s.
 		Where("id = ?", tc.ID).
-		NoAutoCondition().
-		Get(tc)
+		NoAutoCondition()
+
+	// When TaskID is provided (e.g. from URL parameters), verify the comment
+	// belongs to that task to prevent IDOR attacks.
+	if tc.TaskID != 0 {
+		query = query.And("task_id = ?", tc.TaskID)
+	}
+
+	exists, err := query.Get(tc)
 	if err != nil {
 		return err
 	}
@@ -209,8 +219,8 @@ func getTaskCommentSimple(s *xorm.Session, tc *TaskComment) error {
 }
 
 // ReadOne handles getting a single comment
-// @Summary Remove a task comment
-// @Description Remove a task comment. The user doing this need to have at least read access to the task this comment belongs to.
+// @Summary Get a task comment
+// @Description Get a task comment. The user doing this need to have at least read access to the task this comment belongs to.
 // @tags task
 // @Accept json
 // @Produce json

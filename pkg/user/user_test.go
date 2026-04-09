@@ -23,7 +23,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"xorm.io/builder"
 )
 
 func TestCreateUser(t *testing.T) {
@@ -320,6 +319,26 @@ func TestCheckUserCredentials(t *testing.T) {
 		_, err := CheckUserCredentials(s, &Login{Username: "user1@example.com", Password: "12345678"})
 		require.NoError(t, err)
 	})
+	t.Run("disabled user", func(t *testing.T) {
+		db.LoadAndAssertFixtures(t)
+		s := db.NewSession()
+		defer s.Close()
+
+		// user17 is disabled (status=2), password is "12345678"
+		_, err := CheckUserCredentials(s, &Login{Username: "user17", Password: "12345678"})
+		require.Error(t, err)
+		assert.True(t, IsErrAccountDisabled(err))
+	})
+	t.Run("locked user", func(t *testing.T) {
+		db.LoadAndAssertFixtures(t)
+		s := db.NewSession()
+		defer s.Close()
+
+		// user18 is locked (status=3), password is "12345678"
+		_, err := CheckUserCredentials(s, &Login{Username: "user18", Password: "12345678"})
+		require.Error(t, err)
+		assert.True(t, IsErrAccountLocked(err))
+	})
 }
 
 func TestUpdateUser(t *testing.T) {
@@ -398,153 +417,6 @@ func TestUpdateUserPassword(t *testing.T) {
 	})
 }
 
-func TestListUsers(t *testing.T) {
-	user1 := &User{ID: 1}
-
-	t.Run("normal", func(t *testing.T) {
-		db.LoadAndAssertFixtures(t)
-		s := db.NewSession()
-		defer s.Close()
-
-		all, err := ListUsers(s, "user1", user1, nil)
-		require.NoError(t, err)
-		assert.NotEmpty(t, all)
-		assert.Equal(t, "user1", all[0].Username)
-	})
-	t.Run("case insensitive", func(t *testing.T) {
-		db.LoadAndAssertFixtures(t)
-		s := db.NewSession()
-		defer s.Close()
-
-		all, err := ListUsers(s, "uSEr1", user1, nil)
-		require.NoError(t, err)
-		assert.NotEmpty(t, all)
-		assert.Equal(t, "user1", all[0].Username)
-	})
-	t.Run("all users", func(t *testing.T) {
-		db.LoadAndAssertFixtures(t)
-		s := db.NewSession()
-		defer s.Close()
-
-		all, err := ListAllUsers(s)
-		require.NoError(t, err)
-		assert.Len(t, all, 16)
-	})
-	t.Run("no search term", func(t *testing.T) {
-		db.LoadAndAssertFixtures(t)
-		s := db.NewSession()
-		defer s.Close()
-
-		all, err := ListUsers(s, "", user1, nil)
-		require.NoError(t, err)
-		assert.Empty(t, all)
-	})
-	t.Run("not discoverable by email", func(t *testing.T) {
-		db.LoadAndAssertFixtures(t)
-		s := db.NewSession()
-		defer s.Close()
-
-		all, err := ListUsers(s, "user1@example.com", user1, nil)
-		require.NoError(t, err)
-		assert.Empty(t, all)
-		db.AssertExists(t, "users", map[string]interface{}{
-			"email":                 "user1@example.com",
-			"discoverable_by_email": false,
-		}, false)
-	})
-	t.Run("not discoverable by name", func(t *testing.T) {
-		db.LoadAndAssertFixtures(t)
-		s := db.NewSession()
-		defer s.Close()
-
-		all, err := ListUsers(s, "one else", user1, nil)
-		require.NoError(t, err)
-		assert.Empty(t, all)
-		db.AssertExists(t, "users", map[string]interface{}{
-			"name":                 "Some one else",
-			"discoverable_by_name": false,
-		}, false)
-	})
-	t.Run("discoverable by email", func(t *testing.T) {
-		db.LoadAndAssertFixtures(t)
-		s := db.NewSession()
-		defer s.Close()
-
-		all, err := ListUsers(s, "user7@example.com", user1, nil)
-		require.NoError(t, err)
-		assert.Len(t, all, 1)
-		assert.Equal(t, int64(7), all[0].ID)
-		db.AssertExists(t, "users", map[string]interface{}{
-			"email":                 "user7@example.com",
-			"discoverable_by_email": true,
-		}, false)
-	})
-	t.Run("discoverable by partial name", func(t *testing.T) {
-		db.LoadAndAssertFixtures(t)
-		s := db.NewSession()
-		defer s.Close()
-
-		all, err := ListUsers(s, "with space", user1, nil)
-		require.NoError(t, err)
-		assert.Len(t, all, 1)
-		assert.Equal(t, int64(12), all[0].ID)
-		db.AssertExists(t, "users", map[string]interface{}{
-			"name":                 "Name with spaces",
-			"discoverable_by_name": true,
-		}, false)
-	})
-	t.Run("discoverable by email with extra condition", func(t *testing.T) {
-		db.LoadAndAssertFixtures(t)
-		s := db.NewSession()
-		defer s.Close()
-
-		all, err := ListUsers(s, "user7@example.com", user1, &ProjectUserOpts{AdditionalCond: builder.In("id", 7)})
-		require.NoError(t, err)
-		assert.Len(t, all, 1)
-		assert.Equal(t, int64(7), all[0].ID)
-		db.AssertExists(t, "users", map[string]interface{}{
-			"email":                 "user7@example.com",
-			"discoverable_by_email": true,
-		}, false)
-	})
-	t.Run("discoverable by exact username", func(t *testing.T) {
-		db.LoadAndAssertFixtures(t)
-		s := db.NewSession()
-		defer s.Close()
-
-		all, err := ListUsers(s, "user7", user1, nil)
-		require.NoError(t, err)
-		assert.Len(t, all, 1)
-		assert.Equal(t, int64(7), all[0].ID)
-		db.AssertExists(t, "users", map[string]interface{}{
-			"username": "user7",
-		}, false)
-	})
-	t.Run("not discoverable by partial username", func(t *testing.T) {
-		db.LoadAndAssertFixtures(t)
-		s := db.NewSession()
-		defer s.Close()
-
-		all, err := ListUsers(s, "user", user1, nil)
-		require.NoError(t, err)
-		assert.Empty(t, all)
-		db.AssertExists(t, "users", map[string]interface{}{
-			"username": "user7",
-		}, false)
-	})
-	t.Run("discoverable by partial username, email and name when matching fuzzily", func(t *testing.T) {
-		db.LoadAndAssertFixtures(t)
-		s := db.NewSession()
-		defer s.Close()
-
-		all, err := ListUsers(s, "user", user1, &ProjectUserOpts{
-			MatchFuzzily: true,
-		})
-		require.NoError(t, err)
-		assert.Len(t, all, 16)
-	})
-}
-
 func TestUserPasswordReset(t *testing.T) {
 	t.Run("normal", func(t *testing.T) {
 		db.LoadAndAssertFixtures(t)
@@ -555,8 +427,30 @@ func TestUserPasswordReset(t *testing.T) {
 			Token:       "passwordresettesttoken",
 			NewPassword: "12345",
 		}
-		err := ResetPassword(s, reset)
+		_, err := ResetPassword(s, reset)
 		require.NoError(t, err)
+	})
+	t.Run("removes password reset token after use", func(t *testing.T) {
+		db.LoadAndAssertFixtures(t)
+		s := db.NewSession()
+		defer s.Close()
+
+		token := "passwordresettesttoken"
+
+		reset := &PasswordReset{
+			Token:       token,
+			NewPassword: "12345",
+		}
+		_, err := ResetPassword(s, reset)
+		require.NoError(t, err)
+
+		err = s.Commit()
+		require.NoError(t, err)
+
+		db.AssertMissing(t, "user_tokens", map[string]interface{}{
+			"token": token,
+			"kind":  TokenPasswordReset,
+		})
 	})
 	t.Run("without password", func(t *testing.T) {
 		db.LoadAndAssertFixtures(t)
@@ -566,7 +460,7 @@ func TestUserPasswordReset(t *testing.T) {
 		reset := &PasswordReset{
 			Token: "passwordresettesttoken",
 		}
-		err := ResetPassword(s, reset)
+		_, err := ResetPassword(s, reset)
 		require.Error(t, err)
 		assert.True(t, IsErrNoUsernamePassword(err))
 	})
@@ -579,7 +473,7 @@ func TestUserPasswordReset(t *testing.T) {
 			Token:       "",
 			NewPassword: "12345",
 		}
-		err := ResetPassword(s, reset)
+		_, err := ResetPassword(s, reset)
 		require.Error(t, err)
 		assert.True(t, IsErrNoPasswordResetToken(err))
 	})
@@ -592,9 +486,99 @@ func TestUserPasswordReset(t *testing.T) {
 			Token:       "somethingsomething",
 			NewPassword: "12345",
 		}
-		err := ResetPassword(s, reset)
+		_, err := ResetPassword(s, reset)
 		require.Error(t, err)
 		assert.True(t, IsErrInvalidPasswordResetToken(err))
+	})
+	t.Run("disabled user cannot reset password", func(t *testing.T) {
+		db.LoadAndAssertFixtures(t)
+		s := db.NewSession()
+		defer s.Close()
+
+		reset := &PasswordReset{
+			Token:       "disableduserpasswordresettoken",
+			NewPassword: "12345678",
+		}
+		_, err := ResetPassword(s, reset)
+		require.Error(t, err)
+		assert.True(t, IsErrAccountDisabled(err))
+	})
+}
+
+func TestRequestPasswordResetTokenDisabledUser(t *testing.T) {
+	t.Run("disabled user cannot request password reset token", func(t *testing.T) {
+		db.LoadAndAssertFixtures(t)
+		s := db.NewSession()
+		defer s.Close()
+
+		err := RequestUserPasswordResetTokenByEmail(s, &PasswordTokenRequest{
+			Email: "user17@example.com",
+		})
+		require.Error(t, err)
+		assert.True(t, IsErrAccountDisabled(err))
+	})
+}
+
+func TestCleanupOldTokens(t *testing.T) {
+	t.Run("deletes old tokens and keeps recent ones", func(t *testing.T) {
+		db.LoadAndAssertFixtures(t)
+		s := db.NewSession()
+		defer s.Close()
+
+		// Insert a recent password reset token that should NOT be deleted
+		recentToken := &Token{
+			UserID: 1,
+			Token:  "recenttoken",
+			Kind:   TokenPasswordReset,
+		}
+		_, err := s.Insert(recentToken)
+		require.NoError(t, err)
+
+		deleted, err := CleanupOldTokens(s)
+		require.NoError(t, err)
+
+		// Fixtures have three old tokens that should be cleaned up:
+		// id=1 (kind=1, TokenPasswordReset, created 2021), id=4 (kind=3, TokenAccountDeletion, created 2021),
+		// and id=5 (kind=1, TokenPasswordReset for disabled user, created 2024)
+		assert.Equal(t, int64(3), deleted)
+
+		err = s.Commit()
+		require.NoError(t, err)
+
+		// The old password reset token from fixtures should be gone
+		db.AssertMissing(t, "user_tokens", map[string]interface{}{
+			"id": 1,
+		})
+		// The old account deletion token from fixtures should be gone
+		db.AssertMissing(t, "user_tokens", map[string]interface{}{
+			"id": 4,
+		})
+		// The recent token should still exist
+		db.AssertExists(t, "user_tokens", map[string]interface{}{
+			"token": "recenttoken",
+			"kind":  TokenPasswordReset,
+		}, false)
+	})
+	t.Run("does not delete email confirm tokens", func(t *testing.T) {
+		db.LoadAndAssertFixtures(t)
+		s := db.NewSession()
+		defer s.Close()
+
+		_, err := CleanupOldTokens(s)
+		require.NoError(t, err)
+
+		err = s.Commit()
+		require.NoError(t, err)
+
+		// The old email confirm tokens (kind=2) from fixtures should still exist
+		db.AssertExists(t, "user_tokens", map[string]interface{}{
+			"id":   2,
+			"kind": TokenEmailConfirm,
+		}, false)
+		db.AssertExists(t, "user_tokens", map[string]interface{}{
+			"id":   3,
+			"kind": TokenEmailConfirm,
+		}, false)
 	})
 }
 
@@ -650,9 +634,37 @@ func TestConfirmDeletion(t *testing.T) {
 		err := ConfirmDeletion(s, user, token)
 		require.NoError(t, err)
 
+		err = s.Commit()
+		require.NoError(t, err)
+
 		db.AssertMissing(t, "user_tokens", map[string]interface{}{
 			"token": token,
 			"kind":  TokenAccountDeletion,
 		})
 	})
+}
+
+func TestGetUserByID_DisabledUser(t *testing.T) {
+	db.LoadAndAssertFixtures(t)
+	s := db.NewSession()
+	defer s.Close()
+
+	// user17 is disabled (status=2)
+	u, err := GetUserByID(s, 17)
+	require.Error(t, err)
+	assert.True(t, IsErrAccountDisabled(err), "GetUserByID should return ErrAccountDisabled, got: %v", err)
+	// User should still be returned alongside the error
+	assert.NotNil(t, u)
+	assert.Equal(t, int64(17), u.ID)
+}
+
+func TestGetUserByID_ActiveUser(t *testing.T) {
+	db.LoadAndAssertFixtures(t)
+	s := db.NewSession()
+	defer s.Close()
+
+	// user1 is active
+	u, err := GetUserByID(s, 1)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), u.ID)
 }

@@ -202,11 +202,6 @@ func RecalculateTaskPositions(s *xorm.Session, view *ProjectView, a web.Auth) (e
 		a: a,
 	}
 
-	// We're directly using the db here, even if Typesense is configured, because in some edge cases Typesense
-	// does not know about all tasks. These tasks then won't have their position recalculated, which means they will
-	// seemingly jump around after reloading their project.
-	// The real fix here is of course to make sure all tasks are indexed in Typesense, but until that's fixed,
-	// this solves the issue of task positions not being saved.
 	allTasks, _, err := dbSearcher.Search(opts)
 	if err != nil {
 		return
@@ -243,9 +238,10 @@ func RecalculateTaskPositions(s *xorm.Session, view *ProjectView, a web.Auth) (e
 
 	log.Debugf("Inserted %d new positions for %d total tasks in view %d", count, len(allTasks), view.ID)
 
-	return events.Dispatch(&TaskPositionsRecalculatedEvent{
+	events.DispatchOnCommit(s, &TaskPositionsRecalculatedEvent{
 		NewTaskPositions: newPositions,
 	})
+	return nil
 }
 
 func getPositionsForView(s *xorm.Session, view *ProjectView) (positions []*TaskPosition, err error) {
@@ -302,13 +298,15 @@ func recalculateTaskPositionsForRepair(s *xorm.Session, view *ProjectView) error
 
 	log.Debugf("Repair: inserted %d new positions for view %d", count, view.ID)
 
-	return events.Dispatch(&TaskPositionsRecalculatedEvent{
+	events.DispatchOnCommit(s, &TaskPositionsRecalculatedEvent{
 		NewTaskPositions: newPositions,
 	})
+	return nil
 }
 
 func calculateNewPositionForTask(s *xorm.Session, a web.Auth, t *Task, view *ProjectView) (*TaskPosition, error) {
-	if t.Position == 0 {
+	position := t.Position
+	if position == 0 {
 		lowestPosition := &TaskPosition{}
 		exists, err := s.Where("project_view_id = ?", view.ID).
 			OrderBy("position asc").
@@ -317,7 +315,7 @@ func calculateNewPositionForTask(s *xorm.Session, a web.Auth, t *Task, view *Pro
 			return nil, err
 		}
 		if exists {
-			if lowestPosition.Position == 0 {
+			if lowestPosition.Position < MinPositionSpacing {
 				err = RecalculateTaskPositions(s, view, a)
 				if err != nil {
 					return nil, err
@@ -332,21 +330,28 @@ func calculateNewPositionForTask(s *xorm.Session, a web.Auth, t *Task, view *Pro
 				}
 			}
 
-			t.Position = lowestPosition.Position / 2
+			position = lowestPosition.Position / 2
 		}
 	}
 
 	return &TaskPosition{
 		TaskID:        t.ID,
 		ProjectViewID: view.ID,
-		Position:      calculateDefaultPosition(t.Index, t.Position),
+		Position:      calculateDefaultPosition(t.Index, position),
 	}, nil
 }
 
-func DeleteOrphanedTaskPositions(s *xorm.Session) (count int64, err error) {
-	return s.
-		Where("task_id not in (select id from tasks) OR project_view_id not in (select id from project_views)").
-		Delete(&TaskPosition{})
+// DeleteOrphanedTaskPositions removes task position records that reference
+// tasks or project views that no longer exist.
+// If dryRun is true, it counts the orphaned records without deleting them.
+func DeleteOrphanedTaskPositions(s *xorm.Session, dryRun bool) (count int64, err error) {
+	whereClause := "task_id not in (select id from tasks) OR project_view_id not in (select id from project_views)"
+
+	if dryRun {
+		return s.Where(whereClause).Count(&TaskPosition{})
+	}
+
+	return s.Where(whereClause).Delete(&TaskPosition{})
 }
 
 // createPositionsForTasksInView creates position records for tasks that don't have them.
@@ -588,6 +593,58 @@ func resolveTaskPositionConflicts(s *xorm.Session, projectViewID int64, conflict
 	}
 
 	log.Debugf("Repaired position conflict in view %d: %d tasks respaced from position %.6f", projectViewID, len(conflicts), conflictPosition)
+
+	return nil
+}
+
+// resolvePositionConflictsAfterInsert checks a batch of newly inserted task positions
+// for conflicts (duplicate position values within the same view) and resolves them.
+// This is called after bulk-inserting positions during task creation.
+// If resolveTaskPositionConflicts returns ErrNeedsFullRecalculation for a view,
+// it falls back to a full recalculation of all positions in that view.
+func resolvePositionConflictsAfterInsert(s *xorm.Session, positions []*TaskPosition) error {
+	// Track which (viewID, position) pairs we've already checked to avoid
+	// resolving the same conflict group twice.
+	checked := make(map[int64]map[float64]bool)
+	// Track views that have already been fully recalculated so we skip
+	// further conflict checks for them.
+	recalculated := make(map[int64]bool)
+
+	for _, pos := range positions {
+		if recalculated[pos.ProjectViewID] {
+			continue
+		}
+		if checked[pos.ProjectViewID] != nil && checked[pos.ProjectViewID][pos.Position] {
+			continue
+		}
+		if checked[pos.ProjectViewID] == nil {
+			checked[pos.ProjectViewID] = make(map[float64]bool)
+		}
+		checked[pos.ProjectViewID][pos.Position] = true
+
+		conflicts, err := findPositionConflicts(s, pos.ProjectViewID, pos.Position)
+		if err != nil {
+			return err
+		}
+
+		if len(conflicts) <= 1 {
+			continue
+		}
+
+		err = resolveTaskPositionConflicts(s, pos.ProjectViewID, conflicts)
+		if IsErrNeedsFullRecalculation(err) {
+			view := &ProjectView{ID: pos.ProjectViewID}
+			err = recalculateTaskPositionsForRepair(s, view)
+			if err != nil {
+				return err
+			}
+			recalculated[pos.ProjectViewID] = true
+			continue
+		}
+		if err != nil {
+			return err
+		}
+	}
 
 	return nil
 }

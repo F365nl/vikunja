@@ -31,6 +31,27 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestAPITokenRoutesIncludesCaldav(t *testing.T) {
+	e, err := setupTestEnv()
+	require.NoError(t, err)
+
+	s := db.NewSession()
+	defer s.Close()
+	u, err := user.GetUserByID(s, 1)
+	require.NoError(t, err)
+	jwt, err := auth.NewUserJWTAuthtoken(u, "test-session-id")
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/routes", nil)
+	req.Header.Set(echo.HeaderAuthorization, "Bearer "+jwt)
+	res := httptest.NewRecorder()
+	e.ServeHTTP(res, req)
+
+	assert.Equal(t, http.StatusOK, res.Code)
+	assert.Contains(t, res.Body.String(), `"caldav"`)
+	assert.Contains(t, res.Body.String(), `"access"`)
+}
+
 func TestAPIToken(t *testing.T) {
 	t.Run("valid token", func(t *testing.T) {
 		e, err := setupTestEnv()
@@ -63,7 +84,9 @@ func TestAPIToken(t *testing.T) {
 		})
 
 		req.Header.Set(echo.HeaderAuthorization, "Bearer tk_loremipsumdolorsitamet")
-		require.Error(t, h(c))
+		require.NoError(t, h(c))
+		assert.Equal(t, http.StatusUnauthorized, res.Code)
+		assert.Contains(t, res.Body.String(), `"code":11`)
 	})
 	t.Run("expired token", func(t *testing.T) {
 		e, err := setupTestEnv()
@@ -76,7 +99,9 @@ func TestAPIToken(t *testing.T) {
 		})
 
 		req.Header.Set(echo.HeaderAuthorization, "Bearer tk_a5e6f92ddbad68f49ee2c63e52174db0235008c8") // Token 2
-		require.Error(t, h(c))
+		require.NoError(t, h(c))
+		assert.Equal(t, http.StatusUnauthorized, res.Code)
+		assert.Contains(t, res.Body.String(), `"code":11`)
 	})
 	t.Run("valid token, invalid scope", func(t *testing.T) {
 		e, err := setupTestEnv()
@@ -89,7 +114,39 @@ func TestAPIToken(t *testing.T) {
 		})
 
 		req.Header.Set(echo.HeaderAuthorization, "Bearer tk_2eef46f40ebab3304919ab2e7e39993f75f29d2e")
-		require.Error(t, h(c))
+		require.NoError(t, h(c))
+		assert.Equal(t, http.StatusUnauthorized, res.Code)
+		assert.Contains(t, res.Body.String(), `"code":11`)
+	})
+	t.Run("disabled user token rejected", func(t *testing.T) {
+		e, err := setupTestEnv()
+		require.NoError(t, err)
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/tasks", nil)
+		res := httptest.NewRecorder()
+		c := e.NewContext(req, res)
+		h := routes.SetupTokenMiddleware()(func(c *echo.Context) error {
+			return c.String(http.StatusOK, "test")
+		})
+
+		req.Header.Set(echo.HeaderAuthorization, "Bearer tk_disabled_user_test_token_000000001234abcd") // Token 4 (disabled user 17)
+		require.NoError(t, h(c))
+		assert.Equal(t, http.StatusUnauthorized, res.Code)
+		assert.Contains(t, res.Body.String(), `"code":11`)
+	})
+	t.Run("locked user token rejected", func(t *testing.T) {
+		e, err := setupTestEnv()
+		require.NoError(t, err)
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/tasks", nil)
+		res := httptest.NewRecorder()
+		c := e.NewContext(req, res)
+		h := routes.SetupTokenMiddleware()(func(c *echo.Context) error {
+			return c.String(http.StatusOK, "test")
+		})
+
+		req.Header.Set(echo.HeaderAuthorization, "Bearer tk_locked_user_test_token_0000000012345678") // Token 5 (locked user 18)
+		require.NoError(t, h(c))
+		assert.Equal(t, http.StatusUnauthorized, res.Code)
+		assert.Contains(t, res.Body.String(), `"code":11`)
 	})
 	t.Run("jwt", func(t *testing.T) {
 		e, err := setupTestEnv()
@@ -105,7 +162,7 @@ func TestAPIToken(t *testing.T) {
 		defer s.Close()
 		u, err := user.GetUserByID(s, 1)
 		require.NoError(t, err)
-		jwt, err := auth.NewUserJWTAuthtoken(u, false)
+		jwt, err := auth.NewUserJWTAuthtoken(u, "test-session-id")
 		require.NoError(t, err)
 
 		req.Header.Set(echo.HeaderAuthorization, "Bearer "+jwt)

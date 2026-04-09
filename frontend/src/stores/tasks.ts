@@ -5,8 +5,10 @@ import router from '@/router'
 import TaskService from '@/services/task'
 import TaskAssigneeService from '@/services/taskAssignee'
 import LabelTaskService from '@/services/labelTask'
+import TaskDuplicateService from '@/services/taskDuplicateService'
+import TaskDuplicateModel from '@/models/taskDuplicateModel'
 
-import {cleanupItemText, parseTaskText, PREFIXES} from '@/modules/parseTaskText'
+import {cleanupItemText, parseTaskText, PREFIXES} from '@/modules/quickAddMagic'
 
 import TaskAssigneeModel from '@/models/taskAssignee'
 import LabelTaskModel from '@/models/labelTask'
@@ -23,7 +25,6 @@ import type {IProject} from '@/modelTypes/IProject'
 import {setModuleLoading} from '@/stores/helper'
 import {useLabelStore} from '@/stores/labels'
 import {useProjectStore} from '@/stores/projects'
-import {useAttachmentStore} from '@/stores/attachments'
 import {useKanbanStore} from '@/stores/kanban'
 import {useBaseStore} from '@/stores/base'
 import ProjectUserService from '@/services/projectUsers'
@@ -106,7 +107,6 @@ async function findAssignees(parsedTaskAssignees: string[], projectId: number): 
 export const useTaskStore = defineStore('task', () => {
 	const baseStore = useBaseStore()
 	const kanbanStore = useKanbanStore()
-	const attachmentStore = useAttachmentStore()
 	const labelStore = useLabelStore()
 	const projectStore = useProjectStore()
 	const authStore = useAuthStore()
@@ -203,7 +203,6 @@ export const useTaskStore = defineStore('task', () => {
 			}
 			kanbanStore.setTaskInBucketByIndex(newTask)
 		}
-		attachmentStore.add(attachment)
 	}
 
 	async function addAssignee({
@@ -519,6 +518,17 @@ export const useTaskStore = defineStore('task', () => {
 		return task
 	}
 
+	async function duplicateTask(taskId: ITask['id']) {
+		const cancel = setModuleLoading(setIsLoading)
+		try {
+			const taskDuplicateService = new TaskDuplicateService()
+			const response = await taskDuplicateService.create(new TaskDuplicateModel({taskId}))
+			return response.duplicatedTask
+		} finally {
+			cancel()
+		}
+	}
+
 	async function markTaskAsRead(taskId: ITask['id']) {
 		const taskService = new TaskService()
 		await taskService.markTaskAsRead(taskId)
@@ -563,6 +573,7 @@ export const useTaskStore = defineStore('task', () => {
 		findProjectId,
 		ensureLabelsExist,
 		toggleFavorite,
+		duplicateTask,
 		markTaskAsRead,
 	}
 })

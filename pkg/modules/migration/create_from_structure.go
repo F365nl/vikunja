@@ -22,6 +22,7 @@ import (
 	"xorm.io/xorm"
 
 	"code.vikunja.io/api/pkg/db"
+	"code.vikunja.io/api/pkg/events"
 	"code.vikunja.io/api/pkg/log"
 	"code.vikunja.io/api/pkg/models"
 	"code.vikunja.io/api/pkg/modules/background/handler"
@@ -38,10 +39,18 @@ func InsertFromStructure(str []*models.ProjectWithTasksAndBuckets, user *user.Us
 	if err != nil {
 		log.Errorf("[creating structure] Error while creating structure: %s", err.Error())
 		_ = s.Rollback()
+		events.CleanupPending(s)
 		return err
 	}
 
-	return s.Commit()
+	err = s.Commit()
+	if err != nil {
+		events.CleanupPending(s)
+		return err
+	}
+
+	events.DispatchPending(s)
+	return nil
 }
 
 func insertFromStructure(s *xorm.Session, str []*models.ProjectWithTasksAndBuckets, user *user.User) (err error) {
@@ -457,7 +466,8 @@ func createProjectWithEverything(s *xorm.Session, project *models.ProjectWithTas
 		}
 	}
 
-	// All tasks brought their own bucket with them, therefore the newly created default bucket is just extra space
+	// All tasks brought their own bucket with them, therefore the newly created default buckets are just extra space.
+	// Delete all default-created buckets ("To-Do", "Doing", "Done") that were auto-generated.
 	if !needsDefaultBucket {
 		b := &models.Bucket{ProjectID: project.ID}
 
@@ -473,17 +483,21 @@ func createProjectWithEverything(s *xorm.Session, project *models.ProjectWithTas
 			return err
 		}
 		buckets := bucketsIn.([]*models.Bucket)
-		var newBacklogBucket *models.Bucket
-		for _, b := range buckets {
-			if b.Title == "To-Do" {
-				newBacklogBucket = b
-				newBacklogBucket.ProjectID = project.ID
-				break
-			}
+
+		migrationBucketIDs := make(map[int64]bool)
+		for _, mb := range bucketsByOldID {
+			migrationBucketIDs[mb.ID] = true
 		}
-		err = newBacklogBucket.Delete(s, user)
-		if err != nil && !models.IsErrCannotRemoveLastBucket(err) {
-			return err
+
+		for _, b := range buckets {
+			if migrationBucketIDs[b.ID] {
+				continue
+			}
+			b.ProjectID = project.ID
+			err = b.Delete(s, user)
+			if err != nil && !models.IsErrCannotRemoveLastBucket(err) {
+				return err
+			}
 		}
 	}
 

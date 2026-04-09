@@ -19,21 +19,25 @@ package routes
 import (
 	"net/http"
 	"strings"
-	"time"
 
 	"code.vikunja.io/api/pkg/config"
-	"code.vikunja.io/api/pkg/db"
 	"code.vikunja.io/api/pkg/log"
 	"code.vikunja.io/api/pkg/models"
-	"code.vikunja.io/api/pkg/user"
+	"code.vikunja.io/api/pkg/modules/auth"
+	"code.vikunja.io/api/pkg/web"
 
 	echojwt "github.com/labstack/echo-jwt/v5"
 	"github.com/labstack/echo/v5"
 )
 
+// ErrCodeInvalidToken is the error code returned when the JWT is missing,
+// malformed, or expired. The frontend uses this to distinguish "token expired,
+// try refreshing" from other 401s (disabled account, wrong API token, etc.).
+const ErrCodeInvalidToken = 11
+
 func SetupTokenMiddleware() echo.MiddlewareFunc {
 	return echojwt.WithConfig(echojwt.Config{
-		SigningKey: []byte(config.ServiceJWTSecret.GetString()),
+		SigningKey: []byte(config.ServiceSecret.GetString()),
 		Skipper: func(c *echo.Context) bool {
 			authHeader := c.Request().Header.Values("Authorization")
 			if len(authHeader) == 0 {
@@ -53,9 +57,13 @@ func SetupTokenMiddleware() echo.MiddlewareFunc {
 
 			return false
 		},
-		ErrorHandler: func(_ *echo.Context, err error) error {
+		ErrorHandler: func(c *echo.Context, err error) error {
 			if err != nil {
-				return echo.NewHTTPError(http.StatusUnauthorized, "missing, malformed, expired or otherwise invalid token provided")
+				return c.JSON(http.StatusUnauthorized, web.HTTPError{
+					HTTPCode: http.StatusUnauthorized,
+					Code:     ErrCodeInvalidToken,
+					Message:  "missing, malformed, expired or otherwise invalid token provided",
+				})
 			}
 
 			return nil
@@ -64,26 +72,15 @@ func SetupTokenMiddleware() echo.MiddlewareFunc {
 }
 
 func checkAPITokenAndPutItInContext(tokenHeaderValue string, c *echo.Context) error {
-	s := db.NewSession()
-	defer s.Close()
-	token, err := models.GetTokenFromTokenString(s, strings.TrimPrefix(tokenHeaderValue, "Bearer "))
+	token, u, err := auth.ValidateAPITokenString(strings.TrimPrefix(tokenHeaderValue, "Bearer "))
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Internal Server Error").Wrap(err)
-	}
-
-	if time.Now().After(token.ExpiresAt) {
-		log.Debugf("[auth] Tried authenticating with token %d but it expired on %s", token.ID, token.ExpiresAt.String())
+		log.Debugf("[auth] API token validation failed: %v", err)
 		return echo.NewHTTPError(http.StatusUnauthorized, "Unauthorized")
 	}
 
 	if !models.CanDoAPIRoute(c, token) {
 		log.Debugf("[auth] Tried authenticating with token %d but it does not have permission to do this route", token.ID)
 		return echo.NewHTTPError(http.StatusUnauthorized, "Unauthorized")
-	}
-
-	u, err := user.GetUserByID(s, token.OwnerID)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Internal Server Error").Wrap(err)
 	}
 
 	c.Set("api_token", token)

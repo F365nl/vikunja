@@ -70,11 +70,12 @@ func (tm *TeamMember) Create(s *xorm.Session, a web.Auth) (err error) {
 	}
 
 	doer, _ := user2.GetFromAuth(a)
-	return events.Dispatch(&TeamMemberAddedEvent{
+	events.DispatchOnCommit(s, &TeamMemberAddedEvent{
 		Team:   team,
 		Member: member,
 		Doer:   doer,
 	})
+	return nil
 }
 
 // Delete deletes a user from a team
@@ -109,7 +110,7 @@ func (tm *TeamMember) Delete(s *xorm.Session, a web.Auth) (err error) {
 
 	// Find the numeric user id
 	user, err := user2.GetUserByUsername(s, tm.Username)
-	if err != nil {
+	if err != nil && !user2.IsErrUserStatusError(err) {
 		return
 	}
 	tm.UserID = user.ID
@@ -119,17 +120,13 @@ func (tm *TeamMember) Delete(s *xorm.Session, a web.Auth) (err error) {
 		return err
 	}
 
-	err = s.Commit()
-	if err != nil {
-		return err
-	}
-
 	doer, _ := user2.GetFromAuth(a)
-	return events.Dispatch(&TeamMemberRemovedEvent{
+	events.DispatchOnCommit(s, &TeamMemberRemovedEvent{
 		Team:   t,
 		Member: user,
 		Doer:   doer,
 	})
+	return nil
 }
 
 func (tm *TeamMember) MembershipExists(s *xorm.Session) (exists bool, err error) {
@@ -152,7 +149,7 @@ func (tm *TeamMember) MembershipExists(s *xorm.Session) (exists bool, err error)
 func (tm *TeamMember) Update(s *xorm.Session, _ web.Auth) (err error) {
 	// Find the numeric user id
 	user, err := user2.GetUserByUsername(s, tm.Username)
-	if err != nil {
+	if err != nil && !user2.IsErrUserStatusError(err) {
 		return
 	}
 	tm.UserID = user.ID

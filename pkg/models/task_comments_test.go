@@ -45,6 +45,7 @@ func TestTaskComment_Create(t *testing.T) {
 		assert.Equal(t, int64(1), tc.Author.ID)
 		err = s.Commit()
 		require.NoError(t, err)
+		events.DispatchPending(s)
 		events.AssertDispatched(t, &TaskCommentCreatedEvent{})
 
 		db.AssertExists(t, "task_comments", map[string]interface{}{
@@ -80,6 +81,7 @@ func TestTaskComment_Create(t *testing.T) {
 		}
 		err = tc.Create(s, u)
 		require.NoError(t, err)
+		require.NoError(t, s.Commit())
 		ev := &TaskCommentCreatedEvent{
 			Task:    &task,
 			Doer:    u,
@@ -107,6 +109,7 @@ func TestTaskComment_Create(t *testing.T) {
 		}
 		err = tc.Create(s, u)
 		require.NoError(t, err)
+		require.NoError(t, s.Commit())
 
 		ev := &TaskCommentCreatedEvent{
 			Task:    &task,

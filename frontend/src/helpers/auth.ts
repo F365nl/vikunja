@@ -1,5 +1,5 @@
-import {AuthenticatedHTTPFactory} from '@/helpers/fetcher'
-import type {AxiosResponse} from 'axios'
+import {HTTPFactory} from '@/helpers/fetcher'
+import {isDesktopApp, refreshDesktopToken} from '@/helpers/desktopAuth'
 
 let savedToken: string | null = null
 
@@ -32,20 +32,63 @@ export const getToken = (): string | null => {
 export const removeToken = () => {
 	savedToken = null
 	localStorage.removeItem('token')
+	localStorage.removeItem('desktopOAuthRefreshToken')
 }
 
 /**
  * Refreshes an auth token while ensuring it is updated everywhere.
+ * The refresh token is sent automatically as an HttpOnly cookie.
+ * The server rotates the cookie on every call.
+ *
+ * Uses the Web Locks API to coordinate across browser tabs. Only one tab
+ * performs the actual refresh; other tabs waiting for the lock detect that
+ * the token in localStorage was already updated and adopt it directly.
  */
-export async function refreshToken(persist: boolean): Promise<AxiosResponse> {
-	const HTTP = AuthenticatedHTTPFactory()
-	try {
-		const response = await HTTP.post('user/token')
-		saveToken(response.data.token, persist)
-		return response
+export async function refreshToken(persist: boolean): Promise<void> {
+	// In desktop mode, refresh via IPC to the Electron main process
+	if (isDesktopApp()) {
+		const storedRefreshToken = localStorage.getItem('desktopOAuthRefreshToken')
+		if (!storedRefreshToken) {
+			throw new Error('No desktop OAuth refresh token available')
+		}
+		try {
+			const tokens = await refreshDesktopToken(window.API_URL, storedRefreshToken)
+			saveToken(tokens.access_token, persist)
+			localStorage.setItem('desktopOAuthRefreshToken', tokens.refresh_token)
+		} catch (e) {
+			throw new Error('Error renewing token: ', {cause: e})
+		}
+		return
+	}
 
-	} catch(e) {
-		throw new Error('Error renewing token: ', { cause: e })
+	// Capture the token before waiting for the lock so we can detect
+	// if another tab refreshed while we were queued.
+	const tokenBeforeLock = localStorage.getItem('token')
+
+	const doRefresh = async () => {
+		// If the token in localStorage changed while waiting for the lock,
+		// another tab already refreshed. Just adopt the new token.
+		const currentToken = localStorage.getItem('token')
+		if (currentToken && currentToken !== tokenBeforeLock) {
+			savedToken = currentToken
+			return
+		}
+
+		// We hold the lock and no one else refreshed — make the API call.
+		const HTTP = HTTPFactory()
+		try {
+			const response = await HTTP.post('user/token/refresh')
+			saveToken(response.data.token, persist)
+		} catch (e) {
+			throw new Error('Error renewing token: ', {cause: e})
+		}
+	}
+
+	if (navigator.locks) {
+		await navigator.locks.request('vikunja-token-refresh', doRefresh)
+	} else {
+		// Fallback for environments without Web Locks (e.g. insecure HTTP)
+		await doRefresh()
 	}
 }
 

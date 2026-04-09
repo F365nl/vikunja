@@ -113,20 +113,12 @@
 				"setupSuccess": "Sėkmingai nustatei dviejų faktorių identifikavimą!",
 				"enterPassword": "Prašome įvesti savo slaptažodį",
 				"disable": "Išjungti dviejų faktoriu identifikavimą",
-				"confirmSuccess": "Tu sėkmingai patvirtinai savo TOTP nustatymus ir gail naudotis nuo dabar!",
 				"disableSuccess": "Dviejų faktorių identifikavimas buvo sėkmingai išjungtas."
 			},
 			"caldav": {
 				"title": "CalDAV",
-				"howTo": "Gali prijungti Vikunja prie CalDav klientų, kad būtų galima matyti ar valdyti visas užduotis iš skirtingų klientų. Įvesk šią nuorodą į savo paskyrą:",
 				"more": "Daugiau informacijos apie CalDAV Vikunja",
-				"tokens": "CalDAV tokenai",
-				"tokensHowTo": "Galite naudoti CalDAV tokena vietoj slaptažodžio norėdami prisijungti prie paskyros.",
-				"createToken": "Sukurti prieigos raktą",
-				"tokenCreated": "Čia jūsų tokenas: {token}",
-				"wontSeeItAgain": "Užsirašyk, nes daugiau to nepamatysi.",
-				"mustUseToken": "Reikia susikurti CalDAV tokeną, jei norite naudoti CalDAV su trečiųjų šalių paskyromis. Naudokite tokeną, kaip slaptažodį.",
-				"usernameIs": "Tavo vartotojo vardas yra: {0}"
+				"tokens": "CalDAV tokenai"
 			},
 			"avatar": {
 				"title": "Avataras",

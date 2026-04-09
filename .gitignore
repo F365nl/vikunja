@@ -3,11 +3,14 @@
 .idea/httpRequests
 config.yml
 config.yaml
+config.yml.sample
 !docs/config.yml
 !.github/ISSUE_TEMPLATE/config.yml
 !.gitea/ISSUE_TEMPLATE/config.yml
 docs/themes/
 *.db
+*.db-shm
+*.db-wal
 Run
 dist/
 cover.*
@@ -32,6 +35,9 @@ mage-static
 /plugins/*
 /plugins-dev/*
 
+# pnpm
+.pnpm-store/
+
 # Devenv
 .devenv*
 devenv.local.nix
@@ -45,5 +51,6 @@ devenv.local.nix
 # AI Tools
 /.claude/settings.local.json
 PLAN.md
+plans/
 /.crush/
 /.playwright-mcp

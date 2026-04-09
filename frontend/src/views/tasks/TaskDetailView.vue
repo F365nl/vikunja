@@ -13,7 +13,7 @@
 			class="task-view"
 		>
 			<BaseButton
-				v-if="!isModal || isMobile"
+				v-if="!isModal"
 				class="back-button mbs-2"
 				@click="lastProject ? router.back() : router.push(projectRoute)"
 			>
@@ -38,14 +38,14 @@
 				>
 					<a
 						v-if="router.options.history.state?.back?.includes('/projects/'+p.id+'/') || false"
-						v-shortcut="p.id === project?.id ? 'u' : ''"
+						v-shortcut="p.id === project?.id ? 'KeyU' : ''"
 						@click="router.back()"
 					>
 						{{ getProjectTitle(p) }}
 					</a>
 					<RouterLink
 						v-else
-						v-shortcut="p.id === project?.id ? 'u' : ''"
+						v-shortcut="p.id === project?.id ? 'KeyU' : ''"
 						:to="{ name: 'project.index', params: { projectId: p.id } }"
 					>
 						{{ getProjectTitle(p) }}
@@ -55,6 +55,11 @@
 						class="has-text-grey-light"
 					> &gt; </span>
 				</template>
+				<BucketSelect
+					:task="task"
+					:can-write="canWrite"
+					@update:task="Object.assign(task, $event)"
+				/>
 			</h6>
 
 			<ChecklistSummary :task="task" />
@@ -355,6 +360,7 @@
 							:edit-enabled="canWrite"
 							:task="task"
 							@taskChanged="({coverImageAttachmentId}) => task.coverImageAttachmentId = coverImageAttachmentId"
+							@update:attachments="onAttachmentsUpdated"
 						/>
 					</div>
 
@@ -423,7 +429,7 @@
 				>
 					<template v-if="canWrite">
 						<XButton
-							v-shortcut="'t'"
+							v-shortcut="'KeyT'"
 							:class="{'is-pending': !task.done}"
 							class="button--mark-done"
 							icon="check-double"
@@ -439,7 +445,7 @@
 							@update:modelValue="sub => task.subscription = sub"
 						/>
 						<XButton
-							v-shortcut="'s'"
+							v-shortcut="'KeyS'"
 							variant="secondary"
 							:icon="task.isFavorite ? 'star' : ['far', 'star']"
 							@click="toggleFavorite"
@@ -452,7 +458,7 @@
 						<span class="action-heading">{{ $t('task.detail.organization') }}</span>
 						
 						<XButton
-							v-shortcut="'l'"
+							v-shortcut="'KeyL'"
 							variant="secondary"
 							icon="tags"
 							@click="setFieldActive('labels')"
@@ -460,7 +466,7 @@
 							{{ $t('task.detail.actions.label') }}
 						</XButton>
 						<XButton
-							v-shortcut="'p'"
+							v-shortcut="'KeyP'"
 							variant="secondary"
 							icon="exclamation-circle"
 							@click="setFieldActive('priority')"
@@ -475,7 +481,7 @@
 							{{ $t('task.detail.actions.percentDone') }}
 						</XButton>
 						<XButton
-							v-shortcut="'c'"
+							v-shortcut="'KeyC'"
 							variant="secondary"
 							icon="fill-drip"
 							:icon-color="color"
@@ -487,7 +493,7 @@
 						<span class="action-heading">{{ $t('task.detail.management') }}</span>
 
 						<XButton
-							v-shortcut="'a'"
+							v-shortcut="'KeyA'"
 							v-cy="'taskDetail.assign'"
 							variant="secondary"
 							icon="users"
@@ -496,7 +502,7 @@
 							{{ $t('task.detail.actions.assign') }}
 						</XButton>
 						<XButton
-							v-shortcut="'f'"
+							v-shortcut="'KeyF'"
 							variant="secondary"
 							icon="paperclip"
 							@click="openAttachments()"
@@ -504,7 +510,7 @@
 							{{ $t('task.detail.actions.attachments') }}
 						</XButton>
 						<XButton
-							v-shortcut="'r'"
+							v-shortcut="'KeyR'"
 							variant="secondary"
 							icon="sitemap"
 							@click="setRelatedTasksActive()"
@@ -512,18 +518,25 @@
 							{{ $t('task.detail.actions.relatedTasks') }}
 						</XButton>
 						<XButton
-							v-shortcut="'m'"
+							v-shortcut="'KeyM'"
 							variant="secondary"
 							icon="list"
 							@click="setFieldActive('moveProject')"
 						>
 							{{ $t('task.detail.actions.moveProject') }}
 						</XButton>
-						
-						<span class="action-heading">{{ $t('task.detail.dateAndTime') }}</span>
-						
 						<XButton
-							v-shortcut="'d'"
+							variant="secondary"
+							icon="copy"
+							@click="duplicateCurrentTask"
+						>
+							{{ $t('task.detail.actions.duplicate') }}
+						</XButton>
+
+						<span class="action-heading">{{ $t('task.detail.dateAndTime') }}</span>
+
+						<XButton
+							v-shortcut="'KeyD'"
 							variant="secondary"
 							icon="calendar"
 							@click="setFieldActive('dueDate')"
@@ -560,7 +573,7 @@
 							{{ $t('task.detail.actions.repeatAfter') }}
 						</XButton>
 						<XButton
-							v-shortcut="'Shift+Delete'"
+							v-shortcut="deleteShortcut"
 							icon="trash-alt"
 							:shadow="false"
 							class="is-danger is-outlined has-no-border"
@@ -601,10 +614,10 @@
 			</template>
 
 			<template #text>
-				<p class="tw-text-balance">
+				<p class="tw:text-balance">
 					{{ $t('task.detail.delete.text1') }}
 				</p>
-				<p class="tw-text-balance">
+				<p class="tw:text-balance">
 					{{ $t('task.detail.delete.text2') }}
 				</p>
 			</template>
@@ -615,15 +628,15 @@
 <script lang="ts" setup>
 import {ref, reactive, shallowReactive, computed, watch, nextTick, onMounted} from 'vue'
 import {useRouter, useRoute, type RouteLocation, onBeforeRouteLeave} from 'vue-router'
-import {storeToRefs} from 'pinia'
 import {useI18n} from 'vue-i18n'
-import {unrefElement, useDebounceFn, useElementSize, useIntersectionObserver, useMediaQuery, useMutationObserver} from '@vueuse/core'
+import {unrefElement, useDebounceFn, useElementSize, useIntersectionObserver, useMutationObserver} from '@vueuse/core'
 import {klona} from 'klona/lite'
 
 import TaskService from '@/services/task'
 import TaskModel from '@/models/task'
 
 import type {ITask} from '@/modelTypes/ITask'
+import type {IAttachment} from '@/modelTypes/IAttachment'
 import type {IProject} from '@/modelTypes/IProject'
 
 import {PRIORITIES, type Priority} from '@/constants/priorities'
@@ -651,6 +664,7 @@ import RepeatAfter from '@/components/tasks/partials/RepeatAfter.vue'
 import TaskSubscription from '@/components/misc/Subscription.vue'
 import CustomTransition from '@/components/misc/CustomTransition.vue'
 import AssigneeList from '@/components/tasks/partials/AssigneeList.vue'
+import BucketSelect from '@/components/tasks/partials/BucketSelect.vue'
 import Reactions from '@/components/input/Reactions.vue'
 
 import {uploadFile} from '@/helpers/attachments'
@@ -660,7 +674,6 @@ import {scrollIntoView} from '@/helpers/scrollIntoView'
 import {TASK_REPEAT_MODES} from '@/types/IRepeatMode'
 import {playPopSound} from '@/helpers/playPop'
 
-import {useAttachmentStore} from '@/stores/attachments'
 import {useTaskStore} from '@/stores/tasks'
 import {useKanbanStore} from '@/stores/kanban'
 import {useProjectStore} from '@/stores/projects'
@@ -687,14 +700,13 @@ const route = useRoute()
 const {t} = useI18n({useScope: 'global'})
 
 const projectStore = useProjectStore()
-const attachmentStore = useAttachmentStore()
-const {hasAttachments} = storeToRefs(attachmentStore)
 const taskStore = useTaskStore()
 const kanbanStore = useKanbanStore()
 const authStore = useAuthStore()
 const baseStore = useBaseStore()
 
 const task = ref<ITask>(new TaskModel())
+const hasAttachments = computed(() => (task.value.attachments?.length ?? 0) > 0)
 const taskNotFound = ref(false)
 const taskTitle = computed(() => task.value.title)
 useTitle(taskTitle)
@@ -719,7 +731,10 @@ const lastProjectOrTaskProject = computed(() => lastProject.value ?? project.val
 
 // Use Shift+R on macOS (Alt+R produces special characters depending on keyboard layout)
 // Use Alt+r on other platforms
-const reminderShortcut = computed(() => isAppleDevice() ? 'Shift+R' : 'Alt+r')
+const reminderShortcut = computed(() => isAppleDevice() ? 'Shift+KeyR' : 'Alt+KeyR')
+
+// Match native OS conventions for "delete the selected item"
+const deleteShortcut = isAppleDevice() ? 'Backspace' : 'Delete'
 
 onBeforeRouteLeave(async () => {
 	if (taskNotFound.value) {
@@ -781,10 +796,21 @@ const color = computed(() => {
 })
 
 const isModal = computed(() => Boolean(props.backdropView))
-const isMobile = useMediaQuery('(max-width: 1024px)')
 
-function attachmentUpload(file: File, onSuccess?: (url: string) => void) {
-	return uploadFile(props.taskId, file, onSuccess)
+async function attachmentUpload(file: File, onSuccess?: (url: string) => void) {
+	const uploaded = await uploadFile(props.taskId, file, onSuccess)
+	if (uploaded.length > 0) {
+		onAttachmentsUpdated([...task.value.attachments, ...uploaded])
+	}
+	return uploaded
+}
+
+function onAttachmentsUpdated(attachments: IAttachment[]) {
+	task.value.attachments = attachments
+	kanbanStore.setTaskInBucket({
+		...task.value,
+		attachments,
+	})
 }
 
 const heading = ref<HTMLElement | null>(null)
@@ -882,9 +908,8 @@ watch(
 		}
 
 		try {
-			const loaded = await taskService.get({id}, {expand: ['reactions', 'comments', 'is_unread']})
+			const loaded = await taskService.get({id}, {expand: ['reactions', 'comments', 'is_unread', 'buckets']})
 			Object.assign(task.value, loaded)
-			attachmentStore.set(task.value.attachments)
 			taskColor.value = task.value.hexColor
 			setActiveFields()
 
@@ -1093,6 +1118,17 @@ async function changeProject(project: IProject | null) {
 async function toggleFavorite() {
 	const newTask = await taskStore.toggleFavorite(task.value)
 	Object.assign(task.value, newTask)
+}
+
+async function duplicateCurrentTask() {
+	const duplicatedTask = await taskStore.duplicateTask(task.value.id)
+	if (duplicatedTask) {
+		success({message: t('task.detail.duplicateSuccess')})
+		router.push({
+			name: 'task.detail',
+			params: {id: duplicatedTask.id},
+		})
+	}
 }
 
 async function setPriority(priority: Priority) {

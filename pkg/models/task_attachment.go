@@ -18,6 +18,7 @@ package models
 
 import (
 	"bytes"
+	"fmt"
 	"image"
 	"image/png"
 	"io"
@@ -60,8 +61,8 @@ func (*TaskAttachment) TableName() string {
 // NewAttachment creates a new task attachment
 func (ta *TaskAttachment) NewAttachment(s *xorm.Session, f io.ReadSeeker, realname string, realsize uint64, a web.Auth) error {
 
-	// Store the file
-	file, err := files.Create(f, realname, realsize, a)
+	// Store the file using the existing session to avoid nested transactions
+	file, err := files.CreateWithSession(s, f, realname, realsize, a)
 	if err != nil {
 		if files.IsErrFileIsTooLarge(err) {
 			return ErrTaskAttachmentIsTooLarge{Size: realsize}
@@ -97,16 +98,25 @@ func (ta *TaskAttachment) NewAttachment(s *xorm.Session, f io.ReadSeeker, realna
 		return err
 	}
 
-	return events.Dispatch(&TaskAttachmentCreatedEvent{
+	events.DispatchOnCommit(s, &TaskAttachmentCreatedEvent{
 		Task:       &task,
 		Attachment: ta,
 		Doer:       ta.CreatedBy,
 	})
+	return nil
 }
 
 // ReadOne returns a task attachment
 func (ta *TaskAttachment) ReadOne(s *xorm.Session, _ web.Auth) (err error) {
-	exists, err := s.Where("id = ?", ta.ID).Get(ta)
+	query := s.Where("id = ?", ta.ID).NoAutoCondition()
+
+	// When TaskID is provided (e.g. from URL parameters), verify the attachment
+	// belongs to that task to prevent IDOR attacks.
+	if ta.TaskID != 0 {
+		query = query.And("task_id = ?", ta.TaskID)
+	}
+
+	exists, err := query.Get(ta)
 	if err != nil {
 		return
 	}
@@ -219,8 +229,26 @@ func cacheKeyForTaskAttachmentPreview(id int64, size PreviewSize) string {
 func (ta *TaskAttachment) GetPreview(previewSize PreviewSize) []byte {
 	cacheKey := cacheKeyForTaskAttachmentPreview(ta.ID, previewSize)
 
-	result, err := keyvalue.Remember(cacheKey, func() (any, error) {
-		img, _, err := image.Decode(ta.File.File)
+	result, err := keyvalue.RememberValue(cacheKey, func() ([]byte, error) {
+		// Read all bytes up front so we can inspect dimensions without seeking.
+		// The file is an io.ReadCloser (no Seek), so we buffer it once.
+		data, err := io.ReadAll(ta.File.File)
+		if err != nil {
+			return nil, err
+		}
+
+		// Check image dimensions before full decode to prevent DoS
+		// from decompression bombs (small file, huge pixel dimensions)
+		const maxPixels = 50_000_000 // 50 megapixels
+		cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
+		if err != nil {
+			return nil, err
+		}
+		if cfg.Width*cfg.Height > maxPixels {
+			return nil, fmt.Errorf("image dimensions %dx%d exceed maximum of %d pixels", cfg.Width, cfg.Height, maxPixels)
+		}
+
+		img, _, err := image.Decode(bytes.NewReader(data))
 		if err != nil {
 			return nil, err
 		}
@@ -245,7 +273,7 @@ func (ta *TaskAttachment) GetPreview(previewSize PreviewSize) []byte {
 		return nil
 	}
 
-	return result.([]byte)
+	return result
 }
 
 type PreviewSize string
@@ -348,11 +376,12 @@ func (ta *TaskAttachment) Delete(s *xorm.Session, a web.Auth) error {
 		return err
 	}
 
-	return events.Dispatch(&TaskAttachmentDeletedEvent{
+	events.DispatchOnCommit(s, &TaskAttachmentDeletedEvent{
 		Task:       &task,
 		Attachment: ta,
 		Doer:       doer,
 	})
+	return nil
 }
 
 func getTaskAttachmentsByTaskIDs(s *xorm.Session, taskIDs []int64) (attachments []*TaskAttachment, err error) {

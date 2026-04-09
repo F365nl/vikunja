@@ -158,9 +158,18 @@ func HandleCallback(c *echo.Context) error {
 		return err
 	}
 
+	if u.Status == user.StatusDisabled {
+		_ = s.Rollback()
+		return &user.ErrAccountDisabled{UserID: u.ID}
+	}
+	if u.Status == user.StatusAccountLocked {
+		_ = s.Rollback()
+		return &user.ErrAccountLocked{UserID: u.ID}
+	}
+
 	teamData := getTeamDataFromToken(cl.VikunjaGroups, provider)
 
-	err = models.SyncExternalTeamsForUser(s, u, teamData, idToken.Issuer, "OIDC")
+	err = models.SyncExternalTeamsForUser(s, u, teamData, idToken.Issuer, provider.Name)
 	if err != nil {
 		return err
 	}
@@ -233,9 +242,17 @@ func getTeamDataFromToken(groups []map[string]interface{}, provider *Provider) (
 
 // Download and store a user's avatar from an OpenID provider
 func syncUserAvatarFromOpenID(s *xorm.Session, u *user.User, pictureURL string) (err error) {
-	// Don't sync avatar if no picture URL is provided
+	// If no picture URL is provided, reset the avatar provider if it was set to openid
 	if pictureURL == "" {
-		return fmt.Errorf("no picture URL provided")
+		if u.AvatarProvider == "openid" {
+			u.AvatarProvider = "default"
+			_, err = s.Where("id = ?", u.ID).Cols("avatar_provider").Update(&user.User{AvatarProvider: "default"})
+			if err != nil {
+				return fmt.Errorf("error resetting avatar provider: %w", err)
+			}
+			avatar.FlushAllCaches(u)
+		}
+		return nil
 	}
 
 	log.Debugf("Found avatar URL for user %s: %s", u.Username, pictureURL)
@@ -278,10 +295,16 @@ func getOrCreateUser(s *xorm.Session, cl *claims, provider *Provider, idToken *o
 		Issuer:  idToken.Issuer,
 		Subject: idToken.Subject,
 	})
-	if err != nil && !user.IsErrUserDoesNotExist(err) {
+	if err != nil && !user.IsErrUserDoesNotExist(err) && !user.IsErrUserStatusError(err) {
 		return nil, err
 	}
-	alreadyCreatedFromIssuer = err == nil // found if no error, not found if we reach it here despite an error
+	alreadyCreatedFromIssuer = err == nil || user.IsErrUserStatusError(err)
+
+	// If the user exists but is disabled/locked, return early — don't update their profile or sync avatar.
+	// HandleCallback will reject the auth attempt.
+	if alreadyCreatedFromIssuer && user.IsErrUserStatusError(err) {
+		return u, nil
+	}
 
 	if !alreadyCreatedFromIssuer && (provider.EmailFallback || provider.UsernameFallback) {
 
@@ -304,10 +327,15 @@ func getOrCreateUser(s *xorm.Session, cl *claims, provider *Provider, idToken *o
 
 		// Check if the user exists for the given fallback matching options
 		u, err = user.GetUserWithEmail(s, searchUser)
-		if err != nil && !user.IsErrUserDoesNotExist(err) {
+		if err != nil && !user.IsErrUserDoesNotExist(err) && !user.IsErrUserStatusError(err) {
 			return nil, err
 		}
-		fallbackMatchFound = err == nil // found if no error, not found if we reach it here despite an error
+		fallbackMatchFound = err == nil || user.IsErrUserStatusError(err)
+
+		// Same as above: disabled/locked user found via fallback — return early.
+		if fallbackMatchFound && user.IsErrUserStatusError(err) {
+			return u, nil
+		}
 	}
 
 	if !alreadyCreatedFromIssuer && !fallbackMatchFound {
@@ -375,6 +403,14 @@ func mergeClaims(cl *claims, cl2 *claims, forceUserInfo bool) error {
 
 	if (forceUserInfo && cl2.Picture != "") || cl.Picture == "" {
 		cl.Picture = cl2.Picture
+	}
+
+	if (forceUserInfo && len(cl2.VikunjaGroups) > 0) || len(cl.VikunjaGroups) == 0 {
+		cl.VikunjaGroups = cl2.VikunjaGroups
+	}
+
+	if (forceUserInfo && len(cl2.ExtraSettingsLinks) > 0) || len(cl.ExtraSettingsLinks) == 0 {
+		cl.ExtraSettingsLinks = cl2.ExtraSettingsLinks
 	}
 
 	if cl.Email == "" {

@@ -17,10 +17,13 @@
 package v1
 
 import (
+	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
+	"code.vikunja.io/api/pkg/config"
 	"code.vikunja.io/api/pkg/db"
 	"code.vikunja.io/api/pkg/events"
 	"code.vikunja.io/api/pkg/files"
@@ -32,16 +35,10 @@ import (
 
 func checkExportRequest(c *echo.Context) (s *xorm.Session, u *user.User, err error) {
 	s = db.NewSession()
-	defer s.Close()
-
-	err = s.Begin()
-	if err != nil {
-		return nil, nil, err
-	}
 
 	u, err = user.GetCurrentUserFromDB(s, c)
 	if err != nil {
-		_ = s.Rollback()
+		s.Close()
 		return nil, nil, err
 	}
 
@@ -52,17 +49,19 @@ func checkExportRequest(c *echo.Context) (s *xorm.Session, u *user.User, err err
 
 	var pass UserPasswordConfirmation
 	if err := c.Bind(&pass); err != nil {
+		s.Close()
 		return nil, nil, echo.NewHTTPError(http.StatusBadRequest, "No password provided.").Wrap(err)
 	}
 
 	err = c.Validate(pass)
 	if err != nil {
+		s.Close()
 		return nil, nil, echo.NewHTTPError(http.StatusBadRequest, err.Error()).Wrap(err)
 	}
 
 	err = user.CheckUserPassword(u, pass.Password)
 	if err != nil {
-		_ = s.Rollback()
+		s.Close()
 		return nil, nil, err
 	}
 
@@ -85,20 +84,20 @@ func RequestUserDataExport(c *echo.Context) error {
 	if err != nil {
 		return err
 	}
+	defer s.Close()
 
-	err = events.Dispatch(&models.UserDataExportRequestedEvent{
+	events.DispatchOnCommit(s, &models.UserDataExportRequestedEvent{
 		User: u,
 	})
-	if err != nil {
-		_ = s.Rollback()
-		return err
-	}
 
 	err = s.Commit()
 	if err != nil {
 		_ = s.Rollback()
+		events.CleanupPending(s)
 		return err
 	}
+
+	events.DispatchPending(s)
 
 	return c.JSON(http.StatusOK, models.Message{Message: "Successfully requested data export. We will send you an email when it's ready."})
 }
@@ -120,6 +119,7 @@ func DownloadUserDataExport(c *echo.Context) error {
 	if err != nil {
 		return err
 	}
+	defer s.Close()
 
 	err = s.Commit()
 	if err != nil {
@@ -150,7 +150,16 @@ func DownloadUserDataExport(c *echo.Context) error {
 		return err
 	}
 
-	http.ServeContent(c.Response(), c.Request(), exportFile.Name, exportFile.Created, exportFile.File)
+	if config.FilesType.GetString() == "s3" {
+		c.Response().Header().Set("Content-Disposition", "attachment; filename=\""+exportFile.Name+"\"")
+		c.Response().Header().Set("Content-Type", exportFile.Mime)
+		c.Response().Header().Set("Content-Length", strconv.FormatUint(exportFile.Size, 10))
+		c.Response().Header().Set("Last-Modified", exportFile.Created.UTC().Format(http.TimeFormat))
+		_, err = io.Copy(c.Response(), exportFile.File)
+		return err
+	}
+
+	http.ServeContent(c.Response(), c.Request(), exportFile.Name, exportFile.Created, exportFile.File.(io.ReadSeeker))
 	return nil
 }
 

@@ -82,12 +82,21 @@ func TestConvertTicktickTasksToVikunja(t *testing.T) {
 			Order:       -109951627776,
 		},
 		{
-			TaskID:      4,
+			TaskID:        4,
+			ParentID:      0,
+			ProjectName:   "Project 1",
+			Title:         "Test task 4 - archived",
+			Status:        "2",
+			CompletedTime: time3,
+			Order:         -109951627777,
+		},
+		{
+			TaskID:      5,
 			ParentID:    0,
 			ProjectName: "Project 2",
-			Title:       "Test task 4",
+			Title:       "Test task 5",
 			Status:      "0",
-			Order:       -109951627777,
+			Order:       -109951627778,
 		},
 	}
 
@@ -98,7 +107,7 @@ func TestConvertTicktickTasksToVikunja(t *testing.T) {
 	assert.Equal(t, vikunjaTasks[1].ParentProjectID, vikunjaTasks[0].ID)
 	assert.Equal(t, vikunjaTasks[2].ParentProjectID, vikunjaTasks[0].ID)
 
-	assert.Len(t, vikunjaTasks[1].Tasks, 3)
+	assert.Len(t, vikunjaTasks[1].Tasks, 4)
 	assert.Equal(t, vikunjaTasks[1].Title, tickTickTasks[0].ProjectName)
 
 	assert.Equal(t, vikunjaTasks[1].Tasks[0].Title, tickTickTasks[0].Title)
@@ -142,11 +151,107 @@ func TestConvertTicktickTasksToVikunja(t *testing.T) {
 	assert.Equal(t, vikunjaTasks[1].Tasks[2].Position, tickTickTasks[2].Order)
 	assert.False(t, vikunjaTasks[1].Tasks[2].Done)
 
-	assert.Len(t, vikunjaTasks[2].Tasks, 1)
-	assert.Equal(t, vikunjaTasks[2].Title, tickTickTasks[3].ProjectName)
+	assert.Equal(t, vikunjaTasks[1].Tasks[3].Title, tickTickTasks[3].Title)
+	assert.Equal(t, vikunjaTasks[1].Tasks[3].Position, tickTickTasks[3].Order)
+	assert.True(t, vikunjaTasks[1].Tasks[3].Done)
+	assert.Equal(t, vikunjaTasks[1].Tasks[3].DoneAt, tickTickTasks[3].CompletedTime.Time)
 
-	assert.Equal(t, vikunjaTasks[2].Tasks[0].Title, tickTickTasks[3].Title)
-	assert.Equal(t, vikunjaTasks[2].Tasks[0].Position, tickTickTasks[3].Order)
+	assert.Len(t, vikunjaTasks[2].Tasks, 1)
+	assert.Equal(t, vikunjaTasks[2].Title, tickTickTasks[4].ProjectName)
+
+	assert.Equal(t, vikunjaTasks[2].Tasks[0].Title, tickTickTasks[4].Title)
+	assert.Equal(t, vikunjaTasks[2].Tasks[0].Position, tickTickTasks[4].Order)
+}
+
+func TestConvertTicktickTasksChildBeforeParent(t *testing.T) {
+	// Child appears BEFORE parent in the input — this is the order that
+	// causes the import to fail in create_from_structure.go because the
+	// placeholder for the not-yet-created parent has no title.
+	tickTickTasks := []*tickTickTask{
+		{
+			TaskID:      2,
+			ParentID:    1,
+			ProjectName: "Project 1",
+			Title:       "Child task",
+			Status:      "0",
+			Order:       -1099511626,
+		},
+		{
+			TaskID:      1,
+			ParentID:    0,
+			ProjectName: "Project 1",
+			Title:       "Parent task",
+			Status:      "0",
+			Order:       -1099511627776,
+		},
+	}
+
+	vikunjaTasks := convertTickTickToVikunja(tickTickTasks)
+
+	// Find the project with tasks
+	var projectTasks []*models.TaskWithComments
+	for _, p := range vikunjaTasks {
+		if len(p.Tasks) > 0 {
+			projectTasks = p.Tasks
+			break
+		}
+	}
+
+	require.Len(t, projectTasks, 2)
+
+	// The parent (TaskID=1) must come before the child (TaskID=2) in the
+	// output so that create_from_structure.go processes it first.
+	assert.Equal(t, "Parent task", projectTasks[0].Title)
+	assert.Equal(t, "Child task", projectTasks[1].Title)
+
+	// The child still has the correct parent relation
+	assert.Equal(t, models.RelatedTaskMap{
+		models.RelationKindParenttask: []*models.Task{
+			{ID: 1},
+		},
+	}, projectTasks[1].RelatedTasks)
+}
+
+func TestConvertTicktickTasksDeeplyNested(t *testing.T) {
+	// Grandchild -> child -> parent, all in reverse order
+	tickTickTasks := []*tickTickTask{
+		{
+			TaskID:      3,
+			ParentID:    2,
+			ProjectName: "Project 1",
+			Title:       "Grandchild",
+			Status:      "0",
+		},
+		{
+			TaskID:      2,
+			ParentID:    1,
+			ProjectName: "Project 1",
+			Title:       "Child",
+			Status:      "0",
+		},
+		{
+			TaskID:      1,
+			ParentID:    0,
+			ProjectName: "Project 1",
+			Title:       "Root",
+			Status:      "0",
+		},
+	}
+
+	vikunjaTasks := convertTickTickToVikunja(tickTickTasks)
+
+	var projectTasks []*models.TaskWithComments
+	for _, p := range vikunjaTasks {
+		if len(p.Tasks) > 0 {
+			projectTasks = p.Tasks
+			break
+		}
+	}
+
+	require.Len(t, projectTasks, 3)
+	assert.Equal(t, "Root", projectTasks[0].Title)
+	assert.Equal(t, "Child", projectTasks[1].Title)
+	assert.Equal(t, "Grandchild", projectTasks[2].Title)
 }
 
 func TestLinesToSkipBeforeHeader(t *testing.T) {
@@ -443,6 +548,97 @@ func assertLabelsMatch(t *testing.T, vikunjaTask *models.TaskWithComments, expec
 	for _, label := range vikunjaTask.Labels {
 		assert.NotEmpty(t, strings.TrimSpace(label.Title), "No label should be empty or whitespace-only")
 	}
+}
+
+func TestUnmarshalCSVTimeFormats(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected time.Time
+	}{
+		{
+			name:     "ISO format with timezone offset",
+			input:    "2022-10-09T15:09:48+0000",
+			expected: time.Date(2022, 10, 9, 15, 9, 48, 0, time.UTC),
+		},
+		{
+			name:     "Space-separated without timezone",
+			input:    "2026-02-27 14:59:52",
+			expected: time.Date(2026, 2, 27, 14, 59, 52, 0, time.UTC),
+		},
+		{
+			name:     "ISO format with Z suffix",
+			input:    "2022-10-09T15:09:48Z",
+			expected: time.Date(2022, 10, 9, 15, 9, 48, 0, time.UTC),
+		},
+		{
+			name:     "ISO format with positive offset",
+			input:    "2018-12-11T23:00:00+0100",
+			expected: time.Date(2018, 12, 11, 23, 0, 0, 0, time.FixedZone("", 3600)),
+		},
+		{
+			name:     "empty string",
+			input:    "",
+			expected: time.Time{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var ttt tickTickTime
+			err := ttt.UnmarshalCSV(tt.input)
+			require.NoError(t, err)
+			assert.True(t, tt.expected.Equal(ttt.Time), "expected %v, got %v", tt.expected, ttt.Time)
+		})
+	}
+
+	t.Run("invalid format returns error", func(t *testing.T) {
+		var ttt tickTickTime
+		err := ttt.UnmarshalCSV("not-a-date")
+		require.Error(t, err)
+	})
+}
+
+func TestSpaceSeparatedDatesCSV(t *testing.T) {
+	file, err := os.Open("testdata_ticktick_space_dates.csv")
+	require.NoError(t, err)
+	defer file.Close()
+
+	stat, err := file.Stat()
+	require.NoError(t, err)
+
+	lines, err := linesToSkipBeforeHeader(file, stat.Size())
+	require.NoError(t, err)
+	assert.Equal(t, 6, lines)
+
+	_, err = file.Seek(0, io.SeekStart)
+	require.NoError(t, err)
+
+	dec, err := newLineSkipDecoder(file, lines)
+	require.NoError(t, err)
+	tasks := []*tickTickTask{}
+	err = gocsv.UnmarshalDecoder(dec, &tasks)
+	require.NoError(t, err)
+	require.Len(t, tasks, 2)
+
+	// First task: has start date, due date, and created time in space-separated format
+	assert.Equal(t, "Task with space dates", tasks[0].Title)
+	assert.Equal(t, time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC), tasks[0].StartDate.Time)
+	assert.Equal(t, time.Date(2026, 2, 27, 14, 59, 52, 0, time.UTC), tasks[0].DueDate.Time)
+	assert.Equal(t, time.Date(2026, 2, 15, 9, 30, 0, 0, time.UTC), tasks[0].CreatedTime.Time)
+	assert.True(t, tasks[0].CompletedTime.IsZero())
+
+	// Second task: completed, has created time and completed time
+	assert.Equal(t, "Completed task with space dates", tasks[1].Title)
+	assert.Equal(t, time.Date(2026, 2, 10, 8, 0, 0, 0, time.UTC), tasks[1].CreatedTime.Time)
+	assert.Equal(t, time.Date(2026, 2, 25, 16, 45, 30, 0, time.UTC), tasks[1].CompletedTime.Time)
+
+	// Verify the tasks convert to Vikunja format without error
+	for _, task := range tasks {
+		task.Tags = strings.Split(task.TagsList, ", ")
+	}
+	vikunjaTasks := convertTickTickToVikunja(tasks)
+	require.Greater(t, len(vikunjaTasks), 0)
 }
 
 func TestMultilineDescriptions(t *testing.T) {

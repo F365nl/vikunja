@@ -15,7 +15,7 @@
 		/>
 		<div 
 			v-if="filterFromView"
-			class="tw-text-sm mbe-2"
+			class="tw:text-sm mbe-2"
 		>
 			{{ $t('filters.fromView') }}
 			<code>{{ filterFromView }}</code><br>
@@ -54,10 +54,6 @@
 		</template>
 	</Card>
 </template>
-
-<script lang="ts">
-export const ALPHABETICAL_SORT = 'title'
-</script>
 
 <script setup lang="ts">
 import {computed, ref, watch} from 'vue'

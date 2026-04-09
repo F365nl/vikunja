@@ -54,6 +54,9 @@
 			"authenticating": "Todennetaan…",
 			"openIdStateError": "Tila ei täsmää, kieltäydytään jatkamasta!",
 			"openIdGeneralError": "Tapahtui virhe todennettaessa kolmatta osapuolta vastaan.",
+			"desktopTryDemo": "Kokeile Demoa",
+			"desktopWaitingForAuth": "Odotetaan autentikointia…",
+			"desktopOAuthError": "Autentikointi epäonnistui: {error}",
 			"logout": "Kirjaudu ulos",
 			"emailInvalid": "Ole hyvä ja syötä kelvollinen sähköpostiosoite.",
 			"usernameRequired": "Ole hyvä ja anna käyttäjätunnus.",
@@ -91,6 +94,7 @@
 				"discoverableByName": "Salli muiden käyttäjien lisätä minut jäseneksi tiimeihin tai projekteihin, kun he etsivät nimeäni",
 				"discoverableByEmail": "Salli muiden käyttäjien lisätä minut jäseneksi tiimeihin tai projekteihin, kun he etsivät koko sähköpostiani",
 				"playSoundWhenDone": "Toista ääni, kun tehtävä merkitään valmiiksi",
+				"alwaysShowBucketTaskCount": "Näytä aina tehtävien lukumäärä Kanban sarakkeissa",
 				"weekStart": "Viikon ensimmäinen päivä",
 				"weekStartSunday": "Sunnuntai",
 				"weekStartMonday": "Maanantai",
@@ -101,6 +105,19 @@
 				"overdueTasksRemindersTime": "Erääntyneiden tehtävien muistutus sähköpostin aika",
 				"filterUsedOnOverview": "Tallennettu yleisnäkymä-sivulla käytetty suodatin",
 				"minimumPriority": "Pienin prioriteetti, jolla tehtävä näkyy",
+				"dateDisplayOptions": {
+					"mm-dd-yyyy": "MM-DD-YYYY",
+					"dd-mm-yyyy": "DD-MM-YYYY",
+					"yyyy-mm-dd": "YYYY-MM-DD",
+					"mm/dd/yyyy": "MM/DD/YYYY",
+					"dd/mm/yyyy": "DD/MM/YYYY",
+					"yyyy/mm/dd": "YYYY/MM/DD"
+				},
+				"timeFormat": "Aikamuoto",
+				"timeFormatOptions": {
+					"12h": "12-tuntia (AM/PM)",
+					"24h": "24-tuntia (HH:mm)"
+				},
 				"externalUserNameChange": "Nimeäsi hallinnoi kirjautumisoperaattori ({provider}). Muuttaaksesi sen, päivitä se siellä."
 			},
 			"sections": {
@@ -121,19 +138,12 @@
 				"setupSuccess": "Olet määrittänyt kaksivaiheinen tunnistautumisen onnistuneesti!",
 				"enterPassword": "Ole Hyvä ja Syötä Salasanasi",
 				"disable": "Poista kaksivaiheinen tunnistautuminen käytöstä",
-				"confirmSuccess": "TOTP määritys on tehty onnistuneesti ja voit käyttää sitä tästä hetkestä lähtien!",
 				"disableSuccess": "Kaksivaiheinen tunnistautuminen poistettu käytöstä onnistuneesti."
 			},
 			"caldav": {
 				"title": "CalDAV",
-				"howTo": "Voit yhdistää Vikunjan CalDAV asiakasohjelmiin nähdäksesi ja hallitaksesi kaikkia tehtäviä eri asiakasohjelmilla. Syötä tämä url asiakasohjelmaasi:",
 				"more": "Lisätietoja CalDAVista Vikunjassa",
-				"tokens": "CalDAV Tokenit",
-				"createToken": "Luo tokeni",
-				"tokenCreated": "Tässä on tokenisi: {token}",
-				"wontSeeItAgain": "Kirjoita se ylös, et voi nähdä sitä uudelleen.",
-				"mustUseToken": "Sinun täytyy luoda CalDAV token, jos haluat käyttää CalDAVia kolmannen osapuolen asiakasohjelman kanssa. Käytä tokenia salasanana.",
-				"usernameIs": "Käyttäjänimesi on: {0}"
+				"tokens": "CalDAV Tokenit"
 			},
 			"avatar": {
 				"title": "Profiilikuva",
@@ -159,6 +169,9 @@
 					"system": "Järjestelmä",
 					"dark": "Tumma"
 				}
+			},
+			"backgroundBrightness": {
+				"title": "Taustan kirkkaus"
 			},
 			"apiTokens": {
 				"title": "API Tokenit",
@@ -186,6 +199,12 @@
 					"expiresAt": "Vanhentumisaika",
 					"permissions": "Oikeudet"
 				}
+			},
+			"sessions": {
+				"deviceInfo": "Laite",
+				"ipAddress": "IP-Osoite",
+				"lastActive": "Viimeksi Aktiivinen",
+				"noOtherSessions": "Ei muita aktiivisia sessioita."
 			}
 		},
 		"deletion": {
@@ -210,7 +229,8 @@
 			"descriptionPasswordRequired": "Syötä salasanasi jatkaaksesi:",
 			"request": "Pyydä kopio Vikunja Tiedoistani",
 			"success": "Olet onnistuneesti pyytänyt Vikunja Tietosi! Lähetämme sinulle sähköpostiviestin, kun ne ovat valmiit ladattavaksi.",
-			"downloadTitle": "Lataa viedyt Vikunja tietosi"
+			"downloadTitle": "Lataa viedyt Vikunja tietosi",
+			"ready": "Tietosi ovat ladattavissa. Voi ladata ne {0} asti."
 		}
 	},
 	"project": {
@@ -391,6 +411,7 @@
 		"title": "Suodattimet",
 		"clear": "Tyhjennä Suodattimet",
 		"showResults": "Näytä tulokset",
+		"noResults": "Ei tuloksia",
 		"fromView": "Nykyisessä näkymässä on myös suodatin käytössä:",
 		"fromViewBoth": "Sitä käytetään yhdessä sen kanssa, mitä syötät tähän.",
 		"attributes": {
@@ -551,6 +572,8 @@
 	"input": {
 		"resetColor": "Palauta Väri",
 		"datepicker": {
+			"today": "Tänään",
+			"tomorrow": "Huomenna",
 			"chooseDate": "Valitse päivämäärä"
 		},
 		"editor": {
@@ -862,6 +885,12 @@
 			"success": "Tiimi luotiin onnistuneesti."
 		},
 		"edit": {
+			"title": "Muokkaa Tiimiä \"{team}\"",
+			"members": "Tiimin Jäsenet",
+			"search": "Kirjoita hakeaksesi käyttäjää…",
+			"addUser": "Lisää tiimiin",
+			"makeMember": "Tee Jäseneksi",
+			"makeAdmin": "Tee Ylläpitäjäksi",
 			"success": "Tiimi päivitettiin onnistuneesti.",
 			"mustSelectUser": "Ole hyvä ja valitse käyttäjä.",
 			"delete": {
@@ -875,7 +904,8 @@
 			},
 			"leave": {
 				"title": "Poistu tiimistä",
-				"text1": "Haluatko varmasti poistua tästä tiimistä?"
+				"text1": "Haluatko varmasti poistua tästä tiimistä?",
+				"success": "Olet poistunut onnistuneesti tiimistä."
 			}
 		},
 		"attributes": {

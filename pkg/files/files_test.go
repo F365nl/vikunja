@@ -18,6 +18,9 @@ package files
 
 import (
 	"bytes"
+	"image"
+	"image/png"
+	"io"
 	"os"
 	"testing"
 
@@ -60,6 +63,37 @@ func TestCreate(t *testing.T) {
 	})
 }
 
+func TestCreateDetectsMimeType(t *testing.T) {
+	initFixtures(t)
+	ta := &testauth{id: 1}
+
+	// Minimal valid PNG (1x1 pixel)
+	pngData := createMinimalPNG(t)
+
+	f, err := Create(bytes.NewReader(pngData), "test.png", uint64(len(pngData)), ta)
+	require.NoError(t, err)
+	assert.Equal(t, "image/png", f.Mime)
+}
+
+func TestCreateDetectsMimeTypePlainText(t *testing.T) {
+	initFixtures(t)
+	ta := &testauth{id: 1}
+
+	textData := []byte("hello world this is plain text")
+
+	f, err := Create(bytes.NewReader(textData), "readme.txt", uint64(len(textData)), ta)
+	require.NoError(t, err)
+	assert.Equal(t, "text/plain; charset=utf-8", f.Mime)
+}
+
+func createMinimalPNG(t *testing.T) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, 1, 1))
+	buf := &bytes.Buffer{}
+	require.NoError(t, png.Encode(buf, img))
+	return buf.Bytes()
+}
+
 func TestFile_Delete(t *testing.T) {
 	t.Run("Normal", func(t *testing.T) {
 		s := db.NewSession()
@@ -95,6 +129,30 @@ func TestFile_LoadFileByID(t *testing.T) {
 		require.Error(t, err)
 		assert.True(t, os.IsNotExist(err))
 	})
+}
+
+func TestFileSave_UsesStorage(t *testing.T) {
+	originalStorage := storage
+	t.Cleanup(func() {
+		storage = originalStorage
+	})
+
+	mem := newMemStorage()
+	storage = mem
+
+	content := []byte("test-content")
+	file := &File{ID: 123, Size: uint64(len(content))}
+
+	err := file.Save(bytes.NewReader(content))
+	require.NoError(t, err)
+
+	rc, err := mem.Open(file.fileID())
+	require.NoError(t, err)
+	defer rc.Close()
+
+	written, err := io.ReadAll(rc)
+	require.NoError(t, err)
+	assert.Equal(t, content, written)
 }
 
 func TestFile_LoadFileMetaByID(t *testing.T) {

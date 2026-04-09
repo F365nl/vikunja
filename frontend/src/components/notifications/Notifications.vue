@@ -29,6 +29,8 @@
 					v-for="(n, index) in notifications"
 					:key="n.id"
 					class="single-notification"
+					:class="{'is-clickable': notificationHasRoute(n)}"
+					@click="() => notificationHasRoute(n) && to(n, index)()"
 				>
 					<div
 						class="read-indicator"
@@ -48,12 +50,7 @@
 							>
 								{{ getDisplayName(n.notification.doer) }}
 							</span>
-							<BaseButton
-								class="has-text-start"
-								@click="() => to(n, index)()"
-							>
-								{{ n.toText(userInfo) }}
-							</BaseButton>
+							{{ n.toText(userInfo) }}
 						</div>
 						<span
 							v-tooltip="formatDateLong(n.created)"
@@ -86,23 +83,25 @@
 </template>
 
 <script lang="ts" setup>
-import {computed, onMounted, onUnmounted, ref} from 'vue'
-import {useRouter} from 'vue-router'
+import {computed, onMounted, onUnmounted, ref, watch} from 'vue'
+import {useRouter, isNavigationFailure, NavigationFailureType, RouteLocationRaw} from 'vue-router'
 
 import NotificationService from '@/services/notification'
+import NotificationModel from '@/models/notification'
 import BaseButton from '@/components/base/BaseButton.vue'
 import CustomTransition from '@/components/misc/CustomTransition.vue'
 import User from '@/components/misc/User.vue'
-import { NOTIFICATION_NAMES as names, type INotification} from '@/modelTypes/INotification'
+import {NOTIFICATION_NAMES as names, type INotification} from '@/modelTypes/INotification'
 import {closeWhenClickedOutside} from '@/helpers/closeWhenClickedOutside'
 import {formatDateLong, formatDisplayDate} from '@/helpers/time/formatDate'
 import {getDisplayName} from '@/models/user'
 import {useAuthStore} from '@/stores/auth'
+import {useWebSocket} from '@/composables/useWebSocket'
 import XButton from '@/components/input/Button.vue'
 import {success} from '@/message'
 import {useI18n} from 'vue-i18n'
 
-const LOAD_NOTIFICATIONS_INTERVAL = 10000
+const {subscribe, connected: wsConnected} = useWebSocket()
 
 const authStore = useAuthStore()
 const router = useRouter()
@@ -120,26 +119,68 @@ const notifications = computed(() => {
 })
 const userInfo = computed(() => authStore.info)
 
-let interval: ReturnType<typeof setInterval>
+let unsubscribeWs: (() => void) | null = null
+let pollInterval: ReturnType<typeof setInterval> | null = null
 
-onMounted(() => {
-	loadNotifications()
+const POLL_INTERVAL = 10000
+
+onMounted(async () => {
+	// Initial load via REST - wrapped in try/catch so the rest of setup
+	// (click handler, WS subscription, polling) still runs if this fails
+	try {
+		await loadNotifications()
+	} catch (e) {
+		console.warn('Failed to load initial notifications:', e)
+	}
+
 	document.addEventListener('click', hidePopup)
-	document.addEventListener('visibilitychange', loadNotifications)
-	interval = setInterval(loadNotifications, LOAD_NOTIFICATIONS_INTERVAL)
+
+	// Subscribe to real-time notifications
+	unsubscribeWs = subscribe('notification.created', (msg) => {
+		if (msg.event === 'notification.created' && msg.data) {
+			const notification = new NotificationModel(msg.data as Partial<INotification>)
+			// Avoid duplicates if the same notification was already loaded via REST
+			const exists = allNotifications.value.some(n => n.id === notification.id)
+			if (!exists) {
+				allNotifications.value = [notification, ...allNotifications.value]
+			}
+		}
+	})
+
+	// Fallback polling when WebSocket is not available
+	startPollingFallback()
+})
+
+// Reload notifications when WebSocket disconnects to catch any events
+// that may have been missed during the disconnect window
+watch(wsConnected, (isConnected, wasConnected) => {
+	if (wasConnected && !isConnected) {
+		loadNotifications().catch(e => console.warn('Failed to reload notifications after WS disconnect:', e))
+	}
 })
 
 onUnmounted(() => {
 	document.removeEventListener('click', hidePopup)
-	document.removeEventListener('visibilitychange', loadNotifications)
-	clearInterval(interval)
+	unsubscribeWs?.()
+	stopPollingFallback()
 })
 
-async function loadNotifications() {
-	if (document.visibilityState !== 'visible') {
-		return
+function startPollingFallback() {
+	pollInterval = setInterval(async () => {
+		if (!wsConnected.value && document.visibilityState === 'visible') {
+			await loadNotifications()
+		}
+	}, POLL_INTERVAL)
+}
+
+function stopPollingFallback() {
+	if (pollInterval) {
+		clearInterval(pollInterval)
+		pollInterval = null
 	}
-	// We're recreating the notification service here to make sure it uses the latest api user token
+}
+
+async function loadNotifications() {
 	const notificationService = new NotificationService()
 	allNotifications.value = await notificationService.getAll()
 }
@@ -150,41 +191,43 @@ function hidePopup(e) {
 	}
 }
 
-function to(n, index) {
-	const to = {
-		name: '',
-		params: {},
-	}
-
+function getNotificationRoute(n: INotification): RouteLocationRaw | null {
 	switch (n.name) {
 		case names.TASK_COMMENT:
 		case names.TASK_ASSIGNED:
 		case names.TASK_REMINDER:
 		case names.TASK_MENTIONED:
-			to.name = 'task.detail'
-			to.params.id = n.notification.task.id
-			break
-		case names.TASK_DELETED:
-			// Nothing
-			break
+			return {name: 'task.detail', params: {id: (n.notification as {task: {id: number}}).task.id}}
 		case names.PROJECT_CREATED:
-			to.name = 'task.index'
-			to.params.projectId = n.notification.project.id
-			break
+			return {name: 'task.index', params: {projectId: (n.notification as {project: {id: number}}).project.id}}
 		case names.TEAM_MEMBER_ADDED:
-			to.name = 'teams.edit'
-			to.params.id = n.notification.team.id
-			break
+			return {name: 'teams.edit', params: {id: (n.notification as {team: {id: number}}).team.id}}
+		default:
+			return null
 	}
+}
 
+function notificationHasRoute(n: INotification): boolean {
+	return getNotificationRoute(n) !== null
+}
+
+function to(n: INotification, index: number) {
 	return async () => {
-		if (to.name !== '') {
-			router.push(to)
+		const route = getNotificationRoute(n)
+		if (route === null) return
+		
+		const failure = await router.push(route)
+		if (isNavigationFailure(failure, NavigationFailureType.duplicated)) {
+			router.go(0)
 		}
 
 		n.read = true
-		const notificationService = new NotificationService()
-		allNotifications.value[index] = await notificationService.update(n)
+		if (allNotifications.value[index]) {
+			const notificationService = new NotificationService()
+			Object.assign(allNotifications.value[index], await notificationService.update(n))
+		}
+
+		showNotifications.value = false
 	}
 }
 
@@ -249,6 +292,10 @@ async function markAllRead() {
 			padding: 0.25rem 0;
 
 			transition: background-color $transition;
+
+			&.is-clickable {
+				cursor: pointer;
+			}
 
 			&:hover {
 				background: var(--grey-100);

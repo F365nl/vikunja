@@ -8,6 +8,7 @@ import UserModel, {getDisplayName, fetchAvatarBlobUrl, invalidateAvatarCache} fr
 import AvatarService from '@/services/avatar'
 import UserSettingsService from '@/services/userSettings'
 import {getToken, refreshToken, removeToken, saveToken} from '@/helpers/auth'
+import {useWebSocket} from '@/composables/useWebSocket'
 import {setModuleLoading} from '@/stores/helper'
 import {success, error} from '@/message'
 import {
@@ -21,7 +22,7 @@ import router from '@/router'
 import {useConfigStore} from '@/stores/config'
 import UserSettingsModel from '@/models/userSettings'
 import {MILLISECONDS_A_SECOND} from '@/constants/date'
-import {PrefixMode} from '@/modules/parseTaskText'
+import {PrefixMode} from '@/modules/quickAddMagic'
 import {DATE_DISPLAY} from '@/constants/dateDisplay'
 import {TIME_FORMAT} from '@/constants/timeFormat'
 import {RELATION_KIND} from '@/types/IRelationKind'
@@ -76,6 +77,7 @@ export const useAuthStore = defineStore('auth', () => {
 	const avatarUrl = ref('')
 	const settings = ref<IUserSettings>(new UserSettingsModel())
 	
+	const currentSessionId = ref<string | null>(null)
 	const lastUserInfoRefresh = ref<Date | null>(null)
 	const isLoading = ref(false)
 	const isLoadingGeneralSettings = ref(false)
@@ -138,12 +140,18 @@ export const useAuthStore = defineStore('auth', () => {
 				timeFormat: TIME_FORMAT.HOURS_24,
 				defaultTaskRelationType: RELATION_KIND.RELATED,
 				backgroundBrightness: 100,
+				showLastViewed: true,
 				sidebarWidth: null,
 				commentSortOrder: 'asc',
+				desktopQuickEntryShortcut: 'CmdOrCtrl+Shift+A',
 				...newSettings.frontendSettings,
 			},
 		})
-		// console.log('settings from auth store', {...settings.value.frontendSettings})
+
+		// Sync the quick entry shortcut to the desktop app when settings are loaded
+		window.vikunjaDesktop?.updateQuickEntryShortcut(
+			settings.value.frontendSettings.desktopQuickEntryShortcut || '',
+		)
 	}
 
 	function setAuthenticated(newAuthenticated: boolean) {
@@ -257,12 +265,27 @@ export const useAuthStore = defineStore('auth', () => {
 		}
 	}
 
+	async function handleDesktopOAuthTokens(tokens: {access_token: string, refresh_token: string, expires_in: number}) {
+		setIsLoading(true)
+		try {
+			removeToken()
+			saveToken(tokens.access_token, true)
+			localStorage.setItem('desktopOAuthRefreshToken', tokens.refresh_token)
+			await checkAuth()
+		} finally {
+			setIsLoading(false)
+		}
+	}
+
 	async function linkShareAuth({hash, password}) {
 		const HTTP = HTTPFactory()
 		const response = await HTTP.post('/shares/' + hash + '/auth', {
 			password: password,
 		})
 		saveToken(response.data.token, false)
+		// Reset the debounce so checkAuth() actually parses the new link share
+		// JWT instead of silently returning due to the 1-minute throttle.
+		lastUserInfoRefresh.value = null
 		await checkAuth()
 		return response.data
 	}
@@ -272,36 +295,91 @@ export const useAuthStore = defineStore('auth', () => {
 	 */
 	async function checkAuth() {
 		const now = new Date()
-		const inOneMinute = new Date(new Date().setMinutes(now.getMinutes() + 1))
+		const oneMinuteAgo = new Date(new Date().setMinutes(now.getMinutes() - 1))
 		// This function can be called from multiple places at the same time and shortly after one another.
 		// To prevent hitting the api too frequently or race conditions, we check at most once per minute.
 		if (
 			lastUserInfoRefresh.value !== null &&
-			lastUserInfoRefresh.value > inOneMinute
+			lastUserInfoRefresh.value > oneMinuteAgo
 		) {
 			return
 		}
 
 		const jwt = getToken()
 		let isAuthenticated = false
+		let jwtUserType: number | undefined
 		if (jwt) {
 			try {
 				const base64 = jwt
 					.split('.')[1]
 					.replace(/-/g, '+')
 					.replace(/_/g, '/')
-				const info = new UserModel(JSON.parse(atob(base64)))
+				const payload = JSON.parse(atob(base64))
+				const jwtUser = new UserModel(payload)
+				jwtUserType = jwtUser.type
 				const ts = Math.round((new Date()).getTime() / MILLISECONDS_A_SECOND)
 
-				isAuthenticated = info.exp >= ts
-				// Settings should only be loaded from the api request, not via the jwt
-				setUser(info, false)
+				isAuthenticated = jwtUser.exp >= ts
+				currentSessionId.value = payload.sid ?? null
+
+				if (isAuthenticated) {
+					// Only set user from JWT if we don't already have a fully loaded
+					// user with the same ID *and* type. The JWT lacks fields like
+					// `name`, so overwriting a complete user object causes a visible
+					// flash where the display name briefly reverts to the username.
+					// Comparing on type as well is essential: regular users and link
+					// shares share the same numeric ID space, so a USER and a
+					// LINK_SHARE can have the same `id`. Without the type check, a
+					// logged-in user opening a link share whose id collides with
+					// their user id would keep the USER `info.value` and never flip
+					// `authLinkShare` to true, causing the router guard to bounce
+					// between /share/:hash/auth and the project view forever.
+					if (
+						info.value === null ||
+						info.value.id !== jwtUser.id ||
+						info.value.type !== jwtUser.type
+					) {
+						setUser(jwtUser, false)
+					} else {
+						// Always keep exp in sync so token renewal checks stay accurate
+						info.value.exp = jwtUser.exp
+					}
+				} else if (jwtUser.type === AUTH_TYPES.USER) {
+					// JWT expired but this is a user session — attempt a cookie-based
+					// refresh before giving up. This lets users who reopen the app
+					// after the short JWT TTL seamlessly resume their session.
+					try {
+						await refreshToken(true)
+						const freshJwt = getToken()
+						if (freshJwt) {
+							const b64 = freshJwt.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')
+							const p = JSON.parse(atob(b64))
+							const freshUser = new UserModel(p)
+							isAuthenticated = freshUser.exp >= ts
+							currentSessionId.value = p.sid ?? null
+							if (info.value === null || info.value.id !== freshUser.id) {
+								setUser(freshUser, false)
+							} else {
+								info.value.exp = freshUser.exp
+							}
+						}
+					} catch {
+						// Refresh failed — stay unauthenticated
+					}
+				}
 			} catch (_) {
 				logout()
 			}
 
-			if (isAuthenticated) {
-				await refreshUserInfo()
+			if (isAuthenticated && jwtUserType !== AUTH_TYPES.LINK_SHARE) {
+				const user = await refreshUserInfo()
+				if (!user) {
+					// refreshUserInfo() did not return a user — either the
+					// token vanished or a 4xx triggered logout(). Bail out
+					// so the stale local `isAuthenticated` doesn't override
+					// the auth state that logout() already set.
+					return
+				}
 			}
 		}
 
@@ -418,32 +496,51 @@ export const useAuthStore = defineStore('auth', () => {
 	/**
 	 * Renews the api token and saves it to local storage
 	 */
-	function renewToken() {
-		// FIXME: Timeout to avoid race conditions when authenticated as a user (=auth token in localStorage) and as a
-		// link share in another tab. Without the timeout both the token renew and link share auth are executed at
-		// the same time and one might win over the other.
-		setTimeout(async () => {
-			if (!authenticated.value) {
-				return
-			}
+	async function renewToken() {
+		if (!authenticated.value) {
+			return
+		}
 
-			try {
-				await refreshToken(!isLinkShareAuth.value)
-				await checkAuth()
-			} catch (e) {
-				// Don't logout on network errors as the user would then get logged out if they don't have
-				// internet for a short period of time - such as when the laptop is still reconnecting
-				if (e?.request?.status) {
-					await logout()
-				}
+		try {
+			if (isLinkShareAuth.value) {
+				// Link shares renew via the dedicated link-share endpoint (JWT-based).
+				const HTTP = AuthenticatedHTTPFactory()
+				const response = await HTTP.post('user/token')
+				saveToken(response.data.token, false)
+			} else {
+				// User sessions renew via the refresh-token cookie.
+				await refreshToken(true)
 			}
-		}, 5000)
+			await checkAuth()
+		} catch (e) {
+			// Only logout if the JWT has actually expired and we can't refresh.
+			// If the JWT is still valid, the proactive refresh failure is harmless
+			// — the 401 interceptor will handle it when the token really expires.
+			const nowInSeconds = Date.now() / MILLISECONDS_A_SECOND
+			const isExpired = !info.value?.exp || info.value.exp < nowInSeconds
+			if (isExpired && (e?.cause?.request?.status || e?.cause?.response?.status)) {
+				await logout()
+			}
+		}
 	}
 
 	async function logout() {
+		const {disconnect} = useWebSocket()
+		disconnect()
+
+		// Revoke the server session so the refresh token can't be reused.
+		// Best-effort: if the network call fails, still clean up locally.
+		try {
+			const HTTP = AuthenticatedHTTPFactory()
+			await HTTP.post('user/logout')
+		} catch (_e) {
+			// Ignore — session will expire naturally
+		}
+
 		removeToken()
 		const loggedInVia = getLoggedInVia()
 		window.localStorage.clear() // Clear all settings and history we might have saved in local storage.
+		lastUserInfoRefresh.value = null
 		await router.push({name: 'user.login'})
 		await checkAuth()
 
@@ -463,6 +560,7 @@ export const useAuthStore = defineStore('auth', () => {
 		avatarUrl: readonly(avatarUrl),
 		settings: readonly(settings),
 
+		currentSessionId: readonly(currentSessionId),
 		lastUserInfoRefresh: readonly(lastUserInfoRefresh),
 
 		authUser,
@@ -487,6 +585,7 @@ export const useAuthStore = defineStore('auth', () => {
 		login,
 		register,
 		openIdAuth,
+		handleDesktopOAuthTokens,
 		linkShareAuth,
 		checkAuth,
 		refreshUserInfo,

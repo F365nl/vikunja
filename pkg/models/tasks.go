@@ -17,7 +17,6 @@
 package models
 
 import (
-	"errors"
 	"math"
 	"regexp"
 	"sort"
@@ -36,7 +35,6 @@ import (
 	"github.com/google/uuid"
 	clone "github.com/huandu/go-clone/generic"
 	"github.com/jinzhu/copier"
-	"github.com/typesense/typesense-go/v2/typesense"
 	"xorm.io/builder"
 	"xorm.io/xorm"
 )
@@ -131,7 +129,8 @@ type Task struct {
 	CommentCount *int64 `xorm:"-" json:"comment_count,omitempty"`
 
 	// Behaves exactly the same as with the TaskCollection.Expand parameter
-	Expand []TaskCollectionExpandable `xorm:"-" json:"-" query:"expand[]"`
+	Expand    []TaskCollectionExpandable `xorm:"-" json:"-" query:"expand"`
+	ExpandArr []TaskCollectionExpandable `xorm:"-" json:"-" query:"expand[]"`
 
 	// The position of the task - any task project can be sorted as usual by this parameter.
 	// When accessing tasks via views with buckets, this is primarily used to sort them based on a range.
@@ -217,7 +216,7 @@ type taskSearchOptions struct {
 // @Param filter query string false "The filter query to match tasks by. Check out https://vikunja.io/docs/filters for a full explanation of the feature."
 // @Param filter_timezone query string false "The time zone which should be used for date match (statements like "now" resolve to different actual times)"
 // @Param filter_include_nulls query string false "If set to true the result will include filtered fields whose value is set to `null`. Available values are `true` or `false`. Defaults to `false`."
-// @Param expand query []string false "If set to `subtasks`, Vikunja will fetch only tasks which do not have subtasks and then in a second step, will fetch all of these subtasks. This may result in more tasks than the pagination limit being returned, but all subtasks will be present in the response. If set to `buckets`, the buckets of each task will be present in the response. If set to `reactions`, the reactions of each task will be present in the response. If set to `comments`, the first 50 comments of each task will be present in the response. You can set this multiple times with different values."
+// @Param expand query string false "If set to `subtasks`, Vikunja will fetch only tasks which do not have subtasks and then in a second step, will fetch all of these subtasks. This may result in more tasks than the pagination limit being returned, but all subtasks will be present in the response. If set to `buckets`, the buckets of each task will be present in the response. If set to `reactions`, the reactions of each task will be present in the response. If set to `comments`, the first 50 comments of each task will be present in the response. You can set this multiple times with different values."
 // @Security JWTKeyAuth
 // @Success 200 {array} models.Task "The tasks"
 // @Failure 500 {object} models.Message "Internal error"
@@ -309,22 +308,7 @@ func getRawTasksForProjects(s *xorm.Session, projects []*Project, a web.Auth, op
 		a:                   a,
 		hasFavoritesProject: hasFavoritesProject,
 	}
-	if config.TypesenseEnabled.GetBool() {
-		var tsSearcher taskSearcher = &typesenseTaskSearcher{
-			s: s,
-		}
-		origOpts := clone.Clone(opts)
-		tasks, totalItems, err = tsSearcher.Search(opts)
-		// It is possible that project views are not yet in Typesense's index. This causes the query here to fail.
-		// To avoid crashing everything, we fall back to the db search in that case.
-		var tsErr = &typesense.HTTPError{}
-		if err != nil && errors.As(err, &tsErr) && tsErr.Status == 404 {
-			log.Warningf("Unable to fetch tasks from Typesense, error was '%v'. Falling back to db.", err)
-			tasks, totalItems, err = dbSearcher.Search(origOpts)
-		}
-	} else {
-		tasks, totalItems, err = dbSearcher.Search(opts)
-	}
+	tasks, totalItems, err = dbSearcher.Search(opts)
 
 	return tasks, len(tasks), totalItems, err
 }
@@ -527,7 +511,9 @@ func addRelatedTasksToTasks(s *xorm.Session, taskIDs []int64, taskMap map[int64]
 	}
 
 	fullRelatedTasks := make(map[int64]*Task)
-	err = s.In("id", relatedTaskIDs).Find(&fullRelatedTasks)
+	err = s.In("id", relatedTaskIDs).
+		And(accessibleProjectIDsSubquery(a, "`tasks`.`project_id`")).
+		Find(&fullRelatedTasks)
 	if err != nil {
 		return
 	}
@@ -576,18 +562,6 @@ func addBucketsToTasks(s *xorm.Session, a web.Auth, taskIDs []int64, taskMap map
 		return err
 	}
 
-	// We need to fetch all projects for that user to make sure they only
-	// get to see buckets that they have permission to see.
-	projectIDs := []int64{}
-	allProjects, _, _, err := getAllRawProjects(s, a, "", 0, -1, false)
-	if err != nil {
-		return err
-	}
-
-	for _, project := range allProjects {
-		projectIDs = append(projectIDs, project.ID)
-	}
-
 	buckets := make(map[int64]*Bucket)
 	err = s.
 		Where(builder.In("id", builder.Select("bucket_id").
@@ -595,7 +569,7 @@ func addBucketsToTasks(s *xorm.Session, a web.Auth, taskIDs []int64, taskMap map
 			Where(builder.In("task_id", taskIDs)))).
 		And(builder.In("project_view_id", builder.Select("id").
 			From("project_views").
-			Where(builder.In("project_id", projectIDs)))).
+			Where(accessibleProjectIDsSubquery(a, "project_views.project_id")))).
 		Find(&buckets)
 	if err != nil {
 		return err
@@ -947,6 +921,11 @@ func createTask(s *xorm.Session, t *Task, a web.Auth, updateAssignees bool, setB
 		if err != nil {
 			return
 		}
+
+		err = resolvePositionConflictsAfterInsert(s, positions)
+		if err != nil {
+			return
+		}
 	}
 
 	if len(taskBuckets) > 0 {
@@ -978,13 +957,10 @@ func createTask(s *xorm.Session, t *Task, a web.Auth, updateAssignees bool, setB
 		}
 	}
 
-	err = events.Dispatch(&TaskCreatedEvent{
+	events.DispatchOnCommit(s, &TaskCreatedEvent{
 		Task: t,
 		Doer: createdBy,
 	})
-	if err != nil {
-		return err
-	}
 
 	err = updateProjectLastUpdated(s, &Project{ID: t.ProjectID})
 	return
@@ -1196,7 +1172,7 @@ func (t *Task) updateSingleTask(s *xorm.Session, a web.Auth, fields []string) (e
 	}
 
 	views := []*ProjectView{}
-	if (!t.isRepeating() && t.Done != ot.Done) || t.ProjectID != ot.ProjectID {
+	if t.Done != ot.Done || t.ProjectID != ot.ProjectID {
 		err = s.
 			Where("project_id = ? AND view_kind = ? AND bucket_configuration_mode = ?",
 				t.ProjectID, ProjectViewKindKanban, BucketConfigurationModeManual).
@@ -1252,6 +1228,16 @@ func (t *Task) updateSingleTask(s *xorm.Session, a web.Auth, fields []string) (e
 	// When a task changed its done status, make sure it is in the correct bucket
 	if t.ProjectID == ot.ProjectID && !t.isRepeating() && t.Done != ot.Done {
 		err = t.moveTaskToDoneBuckets(s, a, views)
+		if err != nil {
+			return
+		}
+	}
+
+	// Repeating tasks don't stay in the done bucket — route them back
+	// to the default bucket so the next iteration shows up in the
+	// "To-Do" column. See #2573.
+	if t.ProjectID == ot.ProjectID && t.isRepeating() && !ot.Done && t.Done {
+		err = t.moveTaskToDefaultBuckets(s, a, views)
 		if err != nil {
 			return
 		}
@@ -1382,7 +1368,7 @@ func (t *Task) updateSingleTask(s *xorm.Session, a web.Auth, fields []string) (e
 
 	_, err = s.ID(t.ID).
 		Cols(colsToUpdate...).
-		Update(ot)
+		Update(&ot)
 	*t = ot
 	if err != nil {
 		return err
@@ -1398,13 +1384,10 @@ func (t *Task) updateSingleTask(s *xorm.Session, a web.Auth, fields []string) (e
 	t.Updated = nt.Updated
 
 	doer, _ := user.GetFromAuth(a)
-	err = events.Dispatch(&TaskUpdatedEvent{
+	events.DispatchOnCommit(s, &TaskUpdatedEvent{
 		Task: t,
 		Doer: doer,
 	})
-	if err != nil {
-		return err
-	}
 
 	return updateProjectLastUpdated(s, &Project{ID: t.ProjectID})
 }
@@ -1459,6 +1442,42 @@ func (t *Task) moveTaskToDoneBuckets(s *xorm.Session, a web.Auth, views []*Proje
 
 		tb := &TaskBucket{
 			BucketID:      bucketID,
+			TaskID:        t.ID,
+			ProjectViewID: view.ID,
+			ProjectID:     t.ProjectID,
+		}
+		err = updateTaskBucket(s, a, tb)
+		if err != nil {
+			return err
+		}
+
+		tp := TaskPosition{
+			TaskID:        t.ID,
+			ProjectViewID: view.ID,
+			Position:      calculateDefaultPosition(t.Index, t.Position),
+		}
+		err = updateTaskPosition(s, a, &tp)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// moveTaskToDefaultBuckets moves the task to the default bucket of
+// every provided view. It's the counterpart to moveTaskToDoneBuckets
+// and is used when a repeating task is marked done: repeating tasks
+// don't stay in the done bucket, so they should be routed back to
+// the default ("To-Do") bucket so the next iteration is visible there.
+func (t *Task) moveTaskToDefaultBuckets(s *xorm.Session, a web.Auth, views []*ProjectView) error {
+	for _, view := range views {
+		defaultBucketID, err := getDefaultBucketID(s, view)
+		if err != nil {
+			return err
+		}
+
+		tb := &TaskBucket{
+			BucketID:      defaultBucketID,
 			TaskID:        t.ID,
 			ProjectViewID: view.ID,
 			ProjectID:     t.ProjectID,
@@ -1843,13 +1862,10 @@ func (t *Task) Delete(s *xorm.Session, a web.Auth) (err error) {
 	}
 
 	doer, _ := user.GetFromAuth(a)
-	err = events.Dispatch(&TaskDeletedEvent{
+	events.DispatchOnCommit(s, &TaskDeletedEvent{
 		Task: fullTask,
 		Doer: doer,
 	})
-	if err != nil {
-		return
-	}
 
 	err = updateProjectLastUpdated(s, &Project{ID: t.ProjectID})
 	return
@@ -1862,7 +1878,7 @@ func (t *Task) Delete(s *xorm.Session, a web.Auth) (err error) {
 // @Accept json
 // @Produce json
 // @Param id path int true "The task ID"
-// @Param expand query []string false "If set to `subtasks`, Vikunja will fetch only tasks which do not have subtasks and then in a second step, will fetch all of these subtasks. This may result in more tasks than the pagination limit being returned, but all subtasks will be present in the response. If set to `buckets`, the buckets of each task will be present in the response. If set to `reactions`, the reactions of each task will be present in the response. If set to `comments`, the first 50 comments of each task will be present in the response. You can set this multiple times with different values."
+// @Param expand query string false "If set to `subtasks`, Vikunja will fetch only tasks which do not have subtasks and then in a second step, will fetch all of these subtasks. This may result in more tasks than the pagination limit being returned, but all subtasks will be present in the response. If set to `buckets`, the buckets of each task will be present in the response. If set to `reactions`, the reactions of each task will be present in the response. If set to `comments`, the first 50 comments of each task will be present in the response. You can set this multiple times with different values."
 // @Security JWTKeyAuth
 // @Success 200 {object} models.Task "The task"
 // @Failure 404 {object} models.Message "Task not found"
@@ -1870,6 +1886,7 @@ func (t *Task) Delete(s *xorm.Session, a web.Auth) (err error) {
 // @Router /tasks/{id} [get]
 func (t *Task) ReadOne(s *xorm.Session, a web.Auth) (err error) {
 
+	t.Expand = append(t.Expand, t.ExpandArr...)
 	expand := t.Expand
 	*t, err = GetTaskByIDSimple(s, t.ID)
 	if err != nil {
@@ -1914,9 +1931,9 @@ func triggerTaskUpdatedEventForTaskID(s *xorm.Session, auth web.Auth, taskID int
 	}
 
 	doer, _ := user.GetFromAuth(auth)
-	err = events.Dispatch(&TaskUpdatedEvent{
+	events.DispatchOnCommit(s, &TaskUpdatedEvent{
 		Task: &t,
 		Doer: doer,
 	})
-	return err
+	return nil
 }

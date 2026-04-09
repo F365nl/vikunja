@@ -84,16 +84,13 @@ func CreateUser(s *xorm.Session, user *User) (newUser *User, err error) {
 
 	// Get the  full new User
 	newUserOut, err := GetUserByID(s, user.ID)
-	if err != nil {
+	if err != nil && !IsErrUserStatusError(err) {
 		return nil, err
 	}
 
-	err = events.Dispatch(&CreatedEvent{
+	events.DispatchOnCommit(s, &CreatedEvent{
 		User: newUserOut,
 	})
-	if err != nil {
-		return nil, err
-	}
 
 	// Don't send a mail if no mailer is configured
 	if !config.MailerEnabled.GetBool() || user.Issuer != IssuerLocal {
@@ -120,7 +117,7 @@ func CreateUser(s *xorm.Session, user *User) (newUser *User, err error) {
 		ConfirmToken: token.Token,
 	}
 
-	err = notifications.Notify(user, n)
+	err = notifications.Notify(user, n, s)
 	return newUserOut, err
 }
 

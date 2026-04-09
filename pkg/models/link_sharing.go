@@ -96,12 +96,25 @@ func GetLinkShareFromClaims(claims jwt.MapClaims) (share *LinkSharing, err error
 		return nil, &ErrLinkShareTokenInvalid{}
 	}
 
+	id, is := claims["id"].(float64)
+	if !is {
+		return nil, &ErrLinkShareTokenInvalid{}
+	}
+	hash, is := claims["hash"].(string)
+	if !is {
+		return nil, &ErrLinkShareTokenInvalid{}
+	}
+	sharedByID, is := claims["sharedByID"].(float64)
+	if !is {
+		return nil, &ErrLinkShareTokenInvalid{}
+	}
+
 	share = &LinkSharing{}
-	share.ID = int64(claims["id"].(float64))
-	share.Hash = claims["hash"].(string)
+	share.ID = int64(id)
+	share.Hash = hash
 	share.ProjectID = int64(projectID)
 	share.Permission = Permission(permissionFloat)
-	share.SharedByID = int64(claims["sharedByID"].(float64))
+	share.SharedByID = int64(sharedByID)
 	return
 }
 
@@ -187,7 +200,11 @@ func (share *LinkSharing) Create(s *xorm.Session, a web.Auth) (err error) {
 // @Failure 500 {object} models.Message "Internal error"
 // @Router /projects/{project}/shares/{share} [get]
 func (share *LinkSharing) ReadOne(s *xorm.Session, _ web.Auth) (err error) {
-	exists, err := s.Where("id = ?", share.ID).Get(share)
+	query := s.Where("id = ?", share.ID)
+	if share.ProjectID != 0 {
+		query = query.And("project_id = ?", share.ProjectID)
+	}
+	exists, err := query.Get(share)
 	if err != nil {
 		return err
 	}
@@ -213,8 +230,13 @@ func (share *LinkSharing) ReadOne(s *xorm.Session, _ web.Auth) (err error) {
 // @Failure 500 {object} models.Message "Internal error"
 // @Router /projects/{project}/shares [get]
 func (share *LinkSharing) ReadAll(s *xorm.Session, a web.Auth, search string, page int, perPage int) (result interface{}, resultCount int, totalItems int64, err error) {
+	// Don't allow link share authenticated users to list link shares
+	if _, is := a.(*LinkSharing); is {
+		return nil, 0, 0, ErrGenericForbidden{}
+	}
+
 	project := &Project{ID: share.ProjectID}
-	can, _, err := project.CanRead(s, a)
+	can, err := project.IsAdmin(s, a)
 	if err != nil {
 		return nil, 0, 0, err
 	}
@@ -289,7 +311,7 @@ func (share *LinkSharing) ReadAll(s *xorm.Session, a web.Auth, search string, pa
 // @Failure 500 {object} models.Message "Internal error"
 // @Router /projects/{project}/shares/{share} [delete]
 func (share *LinkSharing) Delete(s *xorm.Session, _ web.Auth) (err error) {
-	_, err = s.Where("id = ?", share.ID).Delete(share)
+	_, err = s.Where("id = ? AND project_id = ?", share.ID, share.ProjectID).Delete(share)
 	return
 }
 

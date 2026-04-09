@@ -765,6 +765,198 @@ const docTemplate = `{
                 }
             }
         },
+        "/migration/csv/detect": {
+            "put": {
+                "security": [
+                    {
+                        "JWTKeyAuth": []
+                    }
+                ],
+                "description": "Analyzes a CSV file and returns auto-detected columns, delimiter, quote character, and date format with suggested column mappings.",
+                "consumes": [
+                    "multipart/form-data"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "migration"
+                ],
+                "summary": "Detect CSV structure",
+                "parameters": [
+                    {
+                        "type": "file",
+                        "description": "The CSV file to analyze",
+                        "name": "import",
+                        "in": "formData",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Detection results with suggested mappings",
+                        "schema": {
+                            "$ref": "#/definitions/csv.DetectionResult"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid CSV file",
+                        "schema": {
+                            "$ref": "#/definitions/models.Message"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
+                        "schema": {
+                            "$ref": "#/definitions/models.Message"
+                        }
+                    }
+                }
+            }
+        },
+        "/migration/csv/migrate": {
+            "put": {
+                "security": [
+                    {
+                        "JWTKeyAuth": []
+                    }
+                ],
+                "description": "Imports tasks from a CSV file into Vikunja with the provided configuration.",
+                "consumes": [
+                    "multipart/form-data"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "migration"
+                ],
+                "summary": "Import CSV file",
+                "parameters": [
+                    {
+                        "type": "file",
+                        "description": "The CSV file to import",
+                        "name": "import",
+                        "in": "formData",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "The import configuration JSON",
+                        "name": "config",
+                        "in": "formData",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "A message telling you everything was migrated successfully.",
+                        "schema": {
+                            "$ref": "#/definitions/models.Message"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid CSV file or configuration",
+                        "schema": {
+                            "$ref": "#/definitions/models.Message"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
+                        "schema": {
+                            "$ref": "#/definitions/models.Message"
+                        }
+                    }
+                }
+            }
+        },
+        "/migration/csv/preview": {
+            "put": {
+                "security": [
+                    {
+                        "JWTKeyAuth": []
+                    }
+                ],
+                "description": "Generates a preview of the first 5 tasks that would be imported with the given configuration.",
+                "consumes": [
+                    "multipart/form-data"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "migration"
+                ],
+                "summary": "Preview CSV import",
+                "parameters": [
+                    {
+                        "type": "file",
+                        "description": "The CSV file to preview",
+                        "name": "import",
+                        "in": "formData",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "The import configuration JSON",
+                        "name": "config",
+                        "in": "formData",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Preview of tasks to import",
+                        "schema": {
+                            "$ref": "#/definitions/csv.PreviewResult"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid CSV file or configuration",
+                        "schema": {
+                            "$ref": "#/definitions/models.Message"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
+                        "schema": {
+                            "$ref": "#/definitions/models.Message"
+                        }
+                    }
+                }
+            }
+        },
+        "/migration/csv/status": {
+            "get": {
+                "security": [
+                    {
+                        "JWTKeyAuth": []
+                    }
+                ],
+                "description": "Returns if the current user already did the CSV migration or not.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "migration"
+                ],
+                "summary": "Get CSV migration status",
+                "responses": {
+                    "200": {
+                        "description": "The migration status",
+                        "schema": {
+                            "$ref": "#/definitions/migration.Status"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
+                        "schema": {
+                            "$ref": "#/definitions/models.Message"
+                        }
+                    }
+                }
+            }
+        },
         "/migration/microsoft-todo/auth": {
             "get": {
                 "security": [
@@ -873,7 +1065,7 @@ const docTemplate = `{
             }
         },
         "/migration/ticktick/migrate": {
-            "post": {
+            "put": {
                 "security": [
                     {
                         "JWTKeyAuth": []
@@ -1211,6 +1403,80 @@ const docTemplate = `{
                     }
                 ],
                 "description": "Returns if the current user already did the migation or not. This is useful to show a confirmation message in the frontend if the user is trying to do the same migration again.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "migration"
+                ],
+                "summary": "Get migration status",
+                "responses": {
+                    "200": {
+                        "description": "The migration status",
+                        "schema": {
+                            "$ref": "#/definitions/migration.Status"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
+                        "schema": {
+                            "$ref": "#/definitions/models.Message"
+                        }
+                    }
+                }
+            }
+        },
+        "/migration/wekan/migrate": {
+            "put": {
+                "security": [
+                    {
+                        "JWTKeyAuth": []
+                    }
+                ],
+                "description": "Imports all projects, tasks, labels, checklists, and comments from a WeKan board JSON export into Vikunja.",
+                "consumes": [
+                    "application/x-www-form-urlencoded"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "migration"
+                ],
+                "summary": "Import all projects, tasks etc. from a WeKan board export",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "The WeKan board JSON export file.",
+                        "name": "import",
+                        "in": "formData",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "A message telling you everything was migrated successfully.",
+                        "schema": {
+                            "$ref": "#/definitions/models.Message"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
+                        "schema": {
+                            "$ref": "#/definitions/models.Message"
+                        }
+                    }
+                }
+            }
+        },
+        "/migration/wekan/status": {
+            "get": {
+                "security": [
+                    {
+                        "JWTKeyAuth": []
+                    }
+                ],
+                "description": "Returns if the current user already did the migration or not. This is useful to show a confirmation message in the frontend if the user is trying to do the same migration again.",
                 "produces": [
                     "application/json"
                 ],
@@ -2505,7 +2771,7 @@ const docTemplate = `{
                         "in": "query"
                     },
                     {
-                        "type": "array",
+                        "type": "string",
                         "description": "If set to ` + "`" + `subtasks` + "`" + `, Vikunja will fetch only tasks which do not have subtasks and then in a second step, will fetch all of these subtasks. This may result in more tasks than the pagination limit being returned, but all subtasks will be present in the response. If set to ` + "`" + `buckets` + "`" + `, the buckets of each task will be present in the response. If set to ` + "`" + `reactions` + "`" + `, the reactions of each task will be present in the response. If set to ` + "`" + `comments` + "`" + `, the first 50 comments of each task will be present in the response. You can set this multiple times with different values.",
                         "name": "expand",
                         "in": "query"
@@ -4131,11 +4397,7 @@ const docTemplate = `{
                         "in": "query"
                     },
                     {
-                        "type": "array",
-                        "items": {
-                            "type": "string"
-                        },
-                        "collectionFormat": "csv",
+                        "type": "string",
                         "description": "If set to ` + "`" + `subtasks` + "`" + `, Vikunja will fetch only tasks which do not have subtasks and then in a second step, will fetch all of these subtasks. This may result in more tasks than the pagination limit being returned, but all subtasks will be present in the response. If set to ` + "`" + `buckets` + "`" + `, the buckets of each task will be present in the response. If set to ` + "`" + `reactions` + "`" + `, the reactions of each task will be present in the response. If set to ` + "`" + `comments` + "`" + `, the first 50 comments of each task will be present in the response. You can set this multiple times with different values.",
                         "name": "expand",
                         "in": "query"
@@ -4247,11 +4509,7 @@ const docTemplate = `{
                         "required": true
                     },
                     {
-                        "type": "array",
-                        "items": {
-                            "type": "string"
-                        },
-                        "collectionFormat": "csv",
+                        "type": "string",
                         "description": "If set to ` + "`" + `subtasks` + "`" + `, Vikunja will fetch only tasks which do not have subtasks and then in a second step, will fetch all of these subtasks. This may result in more tasks than the pagination limit being returned, but all subtasks will be present in the response. If set to ` + "`" + `buckets` + "`" + `, the buckets of each task will be present in the response. If set to ` + "`" + `reactions` + "`" + `, the reactions of each task will be present in the response. If set to ` + "`" + `comments` + "`" + `, the first 50 comments of each task will be present in the response. You can set this multiple times with different values.",
                         "name": "expand",
                         "in": "query"
@@ -5102,7 +5360,7 @@ const docTemplate = `{
                         "JWTKeyAuth": []
                     }
                 ],
-                "description": "Remove a task comment. The user doing this need to have at least read access to the task this comment belongs to.",
+                "description": "Get a task comment. The user doing this need to have at least read access to the task this comment belongs to.",
                 "consumes": [
                     "application/json"
                 ],
@@ -5112,7 +5370,7 @@ const docTemplate = `{
                 "tags": [
                     "task"
                 ],
-                "summary": "Remove a task comment",
+                "summary": "Get a task comment",
                 "parameters": [
                     {
                         "type": "integer",
@@ -5264,6 +5522,55 @@ const docTemplate = `{
                     },
                     "404": {
                         "description": "The task comment was not found.",
+                        "schema": {
+                            "$ref": "#/definitions/web.HTTPError"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal error",
+                        "schema": {
+                            "$ref": "#/definitions/models.Message"
+                        }
+                    }
+                }
+            }
+        },
+        "/tasks/{taskID}/duplicate": {
+            "put": {
+                "security": [
+                    {
+                        "JWTKeyAuth": []
+                    }
+                ],
+                "description": "Copies a task with all its properties (labels, assignees, attachments, reminders) into the same project. Creates a \"copied from\" relation between the new and original task.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "task"
+                ],
+                "summary": "Duplicate a task",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "The task ID to duplicate",
+                        "name": "taskID",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "The duplicated task.",
+                        "schema": {
+                            "$ref": "#/definitions/models.TaskDuplicate"
+                        }
+                    },
+                    "403": {
+                        "description": "The user does not have access to the task.",
                         "schema": {
                             "$ref": "#/definitions/web.HTTPError"
                         }
@@ -6077,6 +6384,41 @@ const docTemplate = `{
                 }
             }
         },
+        "/test/all": {
+            "delete": {
+                "description": "Removes all data from every Vikunja table. Used by e2e tests to ensure clean state before each test. Requires the testing token.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "testing"
+                ],
+                "summary": "Truncate all tables",
+                "responses": {
+                    "200": {
+                        "description": "All tables truncated.",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/web.HTTPError"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error.",
+                        "schema": {
+                            "$ref": "#/definitions/models.Message"
+                        }
+                    }
+                }
+            }
+        },
         "/test/{table}": {
             "patch": {
                 "description": "Fills the specified table with the content provided in the payload. You need to enable the testing endpoint before doing this and provide the ` + "`" + `Authorization: \u003ctoken\u003e` + "`" + ` secret when making requests to this endpoint. See docs for more details.",
@@ -6620,6 +6962,26 @@ const docTemplate = `{
                     },
                     "500": {
                         "description": "Internal server error.",
+                        "schema": {
+                            "$ref": "#/definitions/models.Message"
+                        }
+                    }
+                }
+            }
+        },
+        "/user/logout": {
+            "post": {
+                "description": "Destroys the current session and clears the refresh token cookie.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "auth"
+                ],
+                "summary": "Logout",
+                "responses": {
+                    "200": {
+                        "description": "Successfully logged out.",
                         "schema": {
                             "$ref": "#/definitions/models.Message"
                         }
@@ -7408,6 +7770,219 @@ const docTemplate = `{
                 }
             }
         },
+        "/user/settings/webhooks": {
+            "get": {
+                "security": [
+                    {
+                        "JWTKeyAuth": []
+                    }
+                ],
+                "description": "Get all webhook targets configured for the current user (not project-specific).",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "webhooks"
+                ],
+                "summary": "Get all user-level webhook targets",
+                "responses": {
+                    "200": {
+                        "description": "The list of webhook targets",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/models.Webhook"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
+                        "schema": {
+                            "$ref": "#/definitions/models.Message"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "security": [
+                    {
+                        "JWTKeyAuth": []
+                    }
+                ],
+                "description": "Create a webhook target for the current user that receives events across all projects.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "webhooks"
+                ],
+                "summary": "Create a user-level webhook target",
+                "parameters": [
+                    {
+                        "description": "The webhook target",
+                        "name": "webhook",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/models.Webhook"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "The created webhook target",
+                        "schema": {
+                            "$ref": "#/definitions/models.Webhook"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid webhook",
+                        "schema": {
+                            "$ref": "#/definitions/web.HTTPError"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
+                        "schema": {
+                            "$ref": "#/definitions/models.Message"
+                        }
+                    }
+                }
+            }
+        },
+        "/user/settings/webhooks/events": {
+            "get": {
+                "security": [
+                    {
+                        "JWTKeyAuth": []
+                    }
+                ],
+                "description": "Get all webhook events that can be used with user-level webhook targets.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "webhooks"
+                ],
+                "summary": "Get available user-directed webhook events",
+                "responses": {
+                    "200": {
+                        "description": "The list of user-directed webhook events",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/user/settings/webhooks/{id}": {
+            "post": {
+                "security": [
+                    {
+                        "JWTKeyAuth": []
+                    }
+                ],
+                "description": "Update the events for a user-level webhook target.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "webhooks"
+                ],
+                "summary": "Update a user-level webhook target",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Webhook ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "The updated webhook target",
+                        "schema": {
+                            "$ref": "#/definitions/models.Webhook"
+                        }
+                    },
+                    "404": {
+                        "description": "Webhook not found",
+                        "schema": {
+                            "$ref": "#/definitions/web.HTTPError"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
+                        "schema": {
+                            "$ref": "#/definitions/models.Message"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "JWTKeyAuth": []
+                    }
+                ],
+                "description": "Delete a user-level webhook target.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "webhooks"
+                ],
+                "summary": "Delete a user-level webhook target",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Webhook ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successfully deleted",
+                        "schema": {
+                            "$ref": "#/definitions/models.Message"
+                        }
+                    },
+                    "404": {
+                        "description": "Webhook not found",
+                        "schema": {
+                            "$ref": "#/definitions/web.HTTPError"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
+                        "schema": {
+                            "$ref": "#/definitions/models.Message"
+                        }
+                    }
+                }
+            }
+        },
         "/user/timezones": {
             "get": {
                 "security": [
@@ -7447,7 +8022,7 @@ const docTemplate = `{
         },
         "/user/token": {
             "post": {
-                "description": "Returns a new valid jwt user token with an extended length.",
+                "description": "Returns a new valid jwt link share token. Only works for link share tokens.",
                 "consumes": [
                     "application/json"
                 ],
@@ -7455,9 +8030,9 @@ const docTemplate = `{
                     "application/json"
                 ],
                 "tags": [
-                    "user"
+                    "auth"
                 ],
-                "summary": "Renew user token",
+                "summary": "Renew link share token",
                 "responses": {
                     "200": {
                         "description": "OK",
@@ -7466,7 +8041,33 @@ const docTemplate = `{
                         }
                     },
                     "400": {
-                        "description": "Only user token are available for renew.",
+                        "description": "Only link share tokens can be renewed.",
+                        "schema": {
+                            "$ref": "#/definitions/models.Message"
+                        }
+                    }
+                }
+            }
+        },
+        "/user/token/refresh": {
+            "post": {
+                "description": "Exchanges the refresh token cookie for a new short-lived JWT.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "auth"
+                ],
+                "summary": "Refresh user token",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/auth.Token"
+                        }
+                    },
+                    "401": {
+                        "description": "Invalid or expired refresh token.",
                         "schema": {
                             "$ref": "#/definitions/models.Message"
                         }
@@ -7481,7 +8082,7 @@ const docTemplate = `{
                         "JWTKeyAuth": []
                     }
                 ],
-                "description": "Search for a user by its username, name or full email. Name (not username) or email require that the user has enabled this in their settings.",
+                "description": "Search for a user by its username, name or full email. Name (not username) or email require that the user has enabled this in their settings, unless both users share an external team (synced via OIDC/LDAP), in which case they can always find each other.",
                 "consumes": [
                     "application/json"
                 ],
@@ -7858,6 +8459,133 @@ const docTemplate = `{
                     "type": "boolean"
                 }
             }
+        },
+        "csv.ColumnMapping": {
+            "type": "object",
+            "properties": {
+                "attribute": {
+                    "$ref": "#/definitions/csv.TaskAttribute"
+                },
+                "column_index": {
+                    "type": "integer"
+                },
+                "column_name": {
+                    "type": "string"
+                }
+            }
+        },
+        "csv.DetectionResult": {
+            "type": "object",
+            "properties": {
+                "columns": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "date_format": {
+                    "type": "string"
+                },
+                "delimiter": {
+                    "type": "string"
+                },
+                "preview_rows": {
+                    "type": "array",
+                    "items": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    }
+                },
+                "quote_char": {
+                    "type": "string"
+                },
+                "suggested_mapping": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/csv.ColumnMapping"
+                    }
+                }
+            }
+        },
+        "csv.PreviewResult": {
+            "type": "object",
+            "properties": {
+                "tasks": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/csv.PreviewTask"
+                    }
+                },
+                "total_rows": {
+                    "type": "integer"
+                }
+            }
+        },
+        "csv.PreviewTask": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string"
+                },
+                "done": {
+                    "type": "boolean"
+                },
+                "due_date": {
+                    "type": "string"
+                },
+                "end_date": {
+                    "type": "string"
+                },
+                "labels": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "priority": {
+                    "type": "integer"
+                },
+                "project": {
+                    "type": "string"
+                },
+                "start_date": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                }
+            }
+        },
+        "csv.TaskAttribute": {
+            "type": "string",
+            "enum": [
+                "title",
+                "description",
+                "due_date",
+                "start_date",
+                "end_date",
+                "done",
+                "priority",
+                "labels",
+                "project",
+                "reminder",
+                "ignore"
+            ],
+            "x-enum-varnames": [
+                "AttrTitle",
+                "AttrDescription",
+                "AttrDueDate",
+                "AttrStartDate",
+                "AttrEndDate",
+                "AttrDone",
+                "AttrPriority",
+                "AttrLabels",
+                "AttrProject",
+                "AttrReminder",
+                "AttrIgnore"
+            ]
         },
         "files.File": {
             "type": "object",
@@ -8900,6 +9628,19 @@ const docTemplate = `{
                 }
             }
         },
+        "models.TaskDuplicate": {
+            "type": "object",
+            "properties": {
+                "duplicated_task": {
+                    "description": "The duplicated task",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/models.Task"
+                        }
+                    ]
+                }
+            }
+        },
         "models.TaskPosition": {
             "type": "object",
             "properties": {
@@ -9279,6 +10020,10 @@ const docTemplate = `{
                 "updated": {
                     "description": "A timestamp when this webhook target was last updated. You cannot change this value.",
                     "type": "string"
+                },
+                "user_id": {
+                    "description": "The user ID if this is a user-level webhook (mutually exclusive with ProjectID)",
+                    "type": "integer"
                 }
             }
         },
@@ -9384,7 +10129,9 @@ const docTemplate = `{
             "properties": {
                 "new_password": {
                     "description": "The new password for this user.",
-                    "type": "string"
+                    "type": "string",
+                    "maxLength": 72,
+                    "minLength": 8
                 },
                 "token": {
                     "description": "The previously issued reset token.",
@@ -9517,7 +10264,9 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "new_password": {
-                    "type": "string"
+                    "type": "string",
+                    "maxLength": 72,
+                    "minLength": 8
                 },
                 "old_password": {
                     "type": "string"

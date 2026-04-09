@@ -118,7 +118,7 @@ func getUserFromArg(s *xorm.Session, arg string) *user.User {
 	}
 
 	u, err := user.GetUserWithEmail(s, &filter)
-	if err != nil {
+	if err != nil && !user.IsErrUserStatusError(err) {
 		log.Fatalf("Could not get user: %s", err)
 	}
 	return u
@@ -143,7 +143,7 @@ var userListCmd = &cobra.Command{
 
 		if userFlagEmail != "" {
 			u, err := user.GetUserWithEmail(s, &user.User{Email: userFlagEmail})
-			if err != nil {
+			if err != nil && !user.IsErrUserStatusError(err) {
 				if user.IsErrUserDoesNotExist(err) {
 					log.Fatalf("No user found with email %s", userFlagEmail)
 				}
@@ -361,17 +361,17 @@ var userDeleteCmd = &cobra.Command{
 			if err != nil {
 				log.Fatalf("could not read confirmation message: %s", err)
 			}
-			if text != "YES, I CONFIRM\n" {
+
+			// On Windows <ENTER> a newline is \r\n, while on Linux it is only \n.
+			text = strings.TrimRight(text, "\r\n")
+
+			if text != "YES, I CONFIRM" {
 				log.Fatalf("invalid confirmation message")
 			}
 		}
 
 		s := db.NewSession()
 		defer s.Close()
-
-		if err := s.Begin(); err != nil {
-			log.Fatalf("Count not start transaction: %s", err)
-		}
 
 		u := getUserFromArg(s, args[0])
 

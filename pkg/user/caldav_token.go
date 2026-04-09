@@ -16,13 +16,27 @@
 
 package user
 
-import "code.vikunja.io/api/pkg/db"
+import (
+	"code.vikunja.io/api/pkg/db"
+
+	"xorm.io/xorm"
+)
 
 func GenerateNewCaldavToken(u *User) (token *Token, err error) {
 	s := db.NewSession()
 	defer s.Close()
 
-	return generateHashedToken(s, u, TokenCaldavAuth)
+	token, err = generateHashedToken(s, u, TokenCaldavAuth)
+	if err != nil {
+		_ = s.Rollback()
+		return nil, err
+	}
+
+	if err = s.Commit(); err != nil {
+		return nil, err
+	}
+
+	return token, nil
 }
 
 func GetCaldavTokens(u *User) (tokens []*Token, err error) {
@@ -32,9 +46,22 @@ func GetCaldavTokens(u *User) (tokens []*Token, err error) {
 	return getTokensForKind(s, u, TokenCaldavAuth)
 }
 
+// GetCaldavTokensWithSession is like GetCaldavTokens but uses an existing
+// database session instead of creating a new one. This avoids nested sessions
+// which cause deadlocks with SQLite's single-writer model.
+func GetCaldavTokensWithSession(s *xorm.Session, u *User) (tokens []*Token, err error) {
+	return getTokensForKind(s, u, TokenCaldavAuth)
+}
+
 func DeleteCaldavTokenByID(u *User, id int64) error {
 	s := db.NewSession()
 	defer s.Close()
 
-	return removeTokenByID(s, u, TokenCaldavAuth, id)
+	err := removeTokenByID(s, u, TokenCaldavAuth, id)
+	if err != nil {
+		_ = s.Rollback()
+		return err
+	}
+
+	return s.Commit()
 }

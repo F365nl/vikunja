@@ -22,6 +22,7 @@ import (
 	"regexp"
 
 	"code.vikunja.io/api/pkg/db"
+	"code.vikunja.io/api/pkg/events"
 	"code.vikunja.io/api/pkg/notifications"
 	"code.vikunja.io/api/pkg/user"
 
@@ -94,6 +95,18 @@ func TestFindMentionedUsersInText(t *testing.T) {
 	}
 }
 
+func TestHandleMentionsWithNilTask(t *testing.T) {
+	t.Run("HandleTaskUpdatedMentions should not panic with nil task", func(t *testing.T) {
+		events.TestListener(t, &TaskUpdatedEvent{Task: nil, Doer: nil}, &HandleTaskUpdatedMentions{})
+	})
+	t.Run("HandleTaskCreateMentions should not panic with nil task", func(t *testing.T) {
+		events.TestListener(t, &TaskCreatedEvent{Task: nil, Doer: nil}, &HandleTaskCreateMentions{})
+	})
+	t.Run("HandleTaskCommentEditMentions should not panic with nil task", func(t *testing.T) {
+		events.TestListener(t, &TaskCommentUpdatedEvent{Task: nil, Comment: nil, Doer: nil}, &HandleTaskCommentEditMentions{})
+	})
+}
+
 func TestSendingMentionNotification(t *testing.T) {
 	u := &user.User{ID: 1}
 
@@ -103,6 +116,8 @@ func TestSendingMentionNotification(t *testing.T) {
 		defer s.Close()
 
 		task, err := GetTaskByIDSimple(s, 32)
+		require.NoError(t, err)
+		project, err := GetProjectSimpleByID(s, task.ProjectID)
 		require.NoError(t, err)
 		tc := &TaskComment{
 			Comment: `<p>Lorem Ipsum <mention-user data-id="user1">@user1</mention-user> <mention-user data-id="user2">@user2</mention-user> <mention-user data-id="user3">@user3</mention-user> <mention-user data-id="user4">@user4</mention-user> <mention-user data-id="user5">@user5</mention-user> <mention-user data-id="user6">@user6</mention-user></p>`,
@@ -114,11 +129,13 @@ func TestSendingMentionNotification(t *testing.T) {
 			Doer:    u,
 			Task:    &task,
 			Comment: tc,
+			Project: project,
 		}
 
 		_, err = notifyMentionedUsers(s, &task, tc.Comment, n)
 		require.NoError(t, err)
 
+		require.NoError(t, s.Commit())
 		db.AssertExists(t, "notifications", map[string]interface{}{
 			"subject_id":    tc.ID,
 			"notifiable_id": 1,
@@ -157,6 +174,8 @@ func TestSendingMentionNotification(t *testing.T) {
 
 		task, err := GetTaskByIDSimple(s, 32)
 		require.NoError(t, err)
+		project, err := GetProjectSimpleByID(s, task.ProjectID)
+		require.NoError(t, err)
 		tc := &TaskComment{
 			Comment: `<p>Lorem Ipsum <mention-user data-id="user2">@user2</mention-user></p>`,
 			TaskID:  32, // user2 has access to the project that task belongs to
@@ -167,6 +186,7 @@ func TestSendingMentionNotification(t *testing.T) {
 			Doer:    u,
 			Task:    &task,
 			Comment: tc,
+			Project: project,
 		}
 
 		_, err = notifyMentionedUsers(s, &task, tc.Comment, n)

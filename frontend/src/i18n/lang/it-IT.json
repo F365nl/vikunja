@@ -140,20 +140,12 @@
 				"setupSuccess": "Autenticazione a due fattori abilitata!",
 				"enterPassword": "Inserisci La Tua Password",
 				"disable": "Disabilita l'autenticazione a due fattori",
-				"confirmSuccess": "Hai confermato con successo la tua configurazione TOTP e ora puoi utilizzarla!",
 				"disableSuccess": "Autenticazione a due fattori disabilitata."
 			},
 			"caldav": {
 				"title": "CalDAV",
-				"howTo": "Puoi connettere Vikunja ai client CalDAV per visualizzare e gestire tutte le attività da diversi client. Inserisci questo URL nel client:",
 				"more": "Ulteriori informazioni riguardo CalDAV in Vikunja",
-				"tokens": "Token CalDAV",
-				"tokensHowTo": "Puoi utilizzare un token CalDAV al posto di una password per accedere all'indirizzo sopra indicato.",
-				"createToken": "Crea un token",
-				"tokenCreated": "Ecco il token: {token}",
-				"wontSeeItAgain": "Scrivetelo, non potrai più vederlo in futuro.",
-				"mustUseToken": "È necessario creare un token CalDAV se desideri utilizzare CalDAV con un client di terze parti. Usa il token come password.",
-				"usernameIs": "Il tuo nome utente è: {0}"
+				"tokens": "Token CalDAV"
 			},
 			"avatar": {
 				"title": "Avatar",

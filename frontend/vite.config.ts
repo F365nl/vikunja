@@ -4,17 +4,18 @@ import {configDefaults} from 'vitest/config'
 import vue from '@vitejs/plugin-vue'
 import {URL, fileURLToPath} from 'node:url'
 import {dirname, resolve} from 'node:path'
+import {readFileSync} from 'node:fs'
 
 import VueI18nPlugin from '@intlify/unplugin-vue-i18n/vite'
 import {VitePWA} from 'vite-plugin-pwa'
 import UnpluginInjectPreload from 'unplugin-inject-preload/vite'
 import {visualizer} from 'rollup-plugin-visualizer'
 
-import viteSentry, {type ViteSentryPluginOptions} from 'vite-plugin-sentry'
+import { sentryVitePlugin, type SentryVitePluginOptions } from '@sentry/vite-plugin'
 import svgLoader from 'vite-svg-loader'
 import postcssPresetEnv from 'postcss-preset-env'
 import postcssEasingGradients from 'postcss-easing-gradients'
-import tailwindcss from 'tailwindcss'
+import tailwindcss from '@tailwindcss/vite'
 import vueDevTools from 'vite-plugin-vue-devtools'
 
 const pathSrc = fileURLToPath(new URL('./src', import.meta.url)).replaceAll('\\', '/')
@@ -26,29 +27,47 @@ const PREFIXED_SCSS_STYLES = `@use "sass:math";
 /*
 ** Configure sentry plugin
 */
-// @ts-ignore
-function getSentryConfig(env: ImportMetaEnv): ViteSentryPluginOptions {
+function getSentryConfig(env: ImportMetaEnv): SentryVitePluginOptions {
 	return {
-		skipEnvironmentCheck: true,
+		// keep these flags for easier debugging
+		disable: true,
+		debug: true, // print information about which files end up being uploaded
+		silent: false,
 
-		url: 'https://sentry.io',
+		// allow compilation to continue but still emit a warning
+		errorHandler: (err) => console.warn(err),
+
+		// skipEnvironmentCheck: true,
+
+		// url: 'https://sentry.io', // TODO add env
 		authToken: env.SENTRY_AUTH_TOKEN,
 		org: env.SENTRY_ORG,
 		project: env.SENTRY_PROJECT,
-		cleanSourcemapsAfterUpload: true,
-		legacyErrorHandlingMode: true,
-		deploy: {
-			env: env.MODE,
+
+		telemetry: false,
+
+		// sourcemaps: {
+			// assets: [], // TODO
+			// deleteFilesAfterUpload: [], // TODO define glob
+			// rewriteSources // might need that instead of `urlPrefix`
+		// },
+
+		release: {
+			// name: VERSION, // TODO release version
+			setCommits: {
+				auto: true,
+				ignoreMissing: true,
+			},
+			deploy: {
+				env: env.MODE,
+			},
 		},
-		setCommits: {
-			auto: true,
-			ignoreMissing: true,
-		},
-		sourceMaps: {
-			include: ['./dist/assets'],
-			ignore: ['node_modules'],
-			urlPrefix: '~/assets',
-		},
+
+		// sourceMaps: {
+		// 	include: ['./dist/assets'],
+		// 	ignore: ['node_modules'],
+		// 	urlPrefix: '~/assets',
+		// },
 	}
 }
 
@@ -85,8 +104,14 @@ export default defineConfig(({command, mode}) => {
 })
 
 function getBuildConfig(env: Record<string, string>) {
+	const workboxPkgPath = resolve(dirname(pathSrc), 'node_modules/workbox-precaching/package.json')
+	const workboxVersion = JSON.parse(readFileSync(workboxPkgPath, 'utf-8')).version
+
 	return {
 		base: env.VIKUNJA_FRONTEND_BASE,
+		define: {
+			__WORKBOX_VERSION__: JSON.stringify(`v${workboxVersion}`),
+		},
 		// https://vitest.dev/config/
 		test: {
 			environment: 'happy-dom',
@@ -106,7 +131,6 @@ function getBuildConfig(env: Record<string, string>) {
 			},
 			postcss: {
 				plugins: [
-					tailwindcss(),
 					postcssEasingGradients(),
 					postcssPresetEnv({
 						features: {
@@ -117,6 +141,7 @@ function getBuildConfig(env: Record<string, string>) {
 			},
 		},
 		plugins: [
+			tailwindcss(),
 			vue(),
 			svgLoader({
 				// Since the svgs are already manually optimized via https://jakearchibald.github.io/svgomg/
@@ -200,7 +225,8 @@ function getBuildConfig(env: Record<string, string>) {
 			vueDevTools({
 				launchEditor: env.VUE_DEVTOOLS_LAUNCH_EDITOR || 'code',
 			}),
-			viteSentry(getSentryConfig(env)),
+			// Put the Sentry vite plugin after all other plugins
+			sentryVitePlugin(getSentryConfig(env)),
 		],
 		resolve: {
 			alias: [
@@ -213,13 +239,13 @@ function getBuildConfig(env: Record<string, string>) {
 		},
 		server: {
 			host: '127.0.0.1', // see: https://github.com/vitejs/vite/pull/8543
-			port: 4173,
+			port: parseInt(env.VIKUNJA_FRONTEND_PORT || '4173', 10),
 			strictPort: true,
 		},
 		output: {
 			manualChunks: {
 				// by putting tracking related stuff in a separated file we try to prevent unwanted blocking from ad-blockers
-				sentry: ['./src/sentry.ts', '@sentry/vue', '@sentry/tracing'],
+				sentry: ['./src/sentry.ts', '@sentry/*'],
 			},
 		},
 		build: {
