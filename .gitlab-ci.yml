@@ -1,0 +1,6 @@
+variables:
+  IMAGE_NAME: "vikunja"
+include:
+  - project: 'funmc/misc/gitlab-ci-template'
+    ref: main
+    file: 'docker-template.yml'
